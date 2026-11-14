@@ -67,6 +67,22 @@ docker run --rm nvcr.io/nvidia/vllm:<タグ> python3 -c "import transformers; pr
 
 ダウンロードは GPU を使わないので、**Qwen3-Coder-Next の vLLM を動かしたまま**実行できる。今の vLLM と同じ `~/.cache/huggingface` に保存するので、起動時は再ダウンロードしない。
 
+### 稼働中にダウンロードするときの注意
+
+- **ダウンロード用のコンテナに `--gpus` を付けない**。GPU を割り当てなければ、稼働中の vLLM が確保しているメモリには触れない
+- **ダウンロードし終えても、手順2まで Gemma 4 を起動しない**。vLLM は起動時に `--gpu-memory-utilization` の割合でメモリを確保するため、Qwen3-Coder-Next と同時に起動するとメモリ不足で失敗するか、OS が不安定になる
+- 稼働中の推論に影響するのは、ネットワーク帯域とディスクの読み書きだけ。気になる場合は夜間バッチの時間帯を避ける
+- 約62GBあり時間がかかるので、SSH が切れても止まらないよう `tmux` の中で実行する（`tmux new -s gemma` → 実行 → `Ctrl-b d` で切り離し、`tmux attach -t gemma` で戻る）
+- 稼働中の Qwen3-Coder-Next のフォルダ（`models--Qwen--Qwen3-Coder-Next-FP8`）は、空き容量が足りなくても消さない
+
+ダウンロードを始める前に、ログインなしで取れるかを確認しておく（Hugging Face にログインできないため）。
+
+```bash
+curl -sI https://huggingface.co/google/gemma-4-31B-it/resolve/main/config.json | head -n 1
+# HTTP/2 200 または 302 → そのままダウンロードできる
+# 401 / 403 → ログインが必要。下の「401 や gated で失敗した場合」の入手先を使う
+```
+
 ```bash
 # 進捗バー付きでダウンロード（途中で止まっても再実行すれば続きから再開する）
 docker run --rm -it \
@@ -98,7 +114,16 @@ modelscope download --model <リポジトリ名> --local_dir ~/models/gemma-4-31
 ```bash
 du -sh ~/.cache/huggingface/hub/models--google--gemma-4-31B-it   # Hugging Face から落とした場合（約62GB）
 du -sh ~/models/gemma-4-31B-it                                   # フォルダを指定した場合
+
+# 重み（*.safetensors）・config.json・トークナイザーが揃っているか
+ls ~/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/*/
+
+# Qwen3-Coder-Next が影響なく動き続けているか
+curl -s http://localhost:8000/v1/models
 ```
+
+- [ ] ダウンロードしたフォルダの大きさが約62GBで、`*.safetensors` がそろっている
+- [ ] `/v1/models` に `qwen3-coder-next` が出ている（Qwen3-Coder-Next は動いたまま）
 
 ## 手順2: Gemma 4 31B で vLLM を起動し直す
 
