@@ -157,13 +157,15 @@ watch -n 10 'du -sh ~/.cache/huggingface/hub/models--Qwen--Qwen3-Coder-Next-FP8'
 
 手順3の `vllm serve` は、次のようにコンテナ内で実行する。`-d` を付けているので、コマンドはコンテナIDを1行表示してすぐ終わる。以降の処理はバックグラウンドで進むため、止まったわけではない。状況は `docker logs -f vllm` で見る。
 
+コンテナ内の vLLM は 8000 番（`--port 8000`）で待ち受け、`-p 11434:8000` でホストの 11434 番に転送する。アプリ・`curl` からの接続先は、直接起動した場合と同じ 11434 番。`-p` は `--network host` と一緒には効かないので、`--network host` は付けない。
+
 ```bash
-docker run -d --name vllm --gpus all --network host --ipc=host \
+docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   nvcr.io/nvidia/vllm:<タグ> \
   vllm serve Qwen/Qwen3-Coder-Next-FP8 \
     --served-model-name claude-opus-4-6 \
-    --host 0.0.0.0 --port 11434 \
+    --host 0.0.0.0 --port 8000 \
     --gpu-memory-utilization 0.8 \
     --max-model-len 262144 \
     --max-num-seqs 2 \
@@ -230,7 +232,7 @@ vLLM は、モデルの読み込みとウォームアップがすべて終わっ
 
 1. `Loading safetensors checkpoint shards: xx%`（モデルの読み込み）
 2. `torch.compile` / `Capturing CUDA graphs`（ウォームアップ。数分止まって見えることがある）
-3. `Application startup complete` / `Uvicorn running on http://0.0.0.0:11434`（起動完了。ここから `curl` が通る）
+3. `Application startup complete` / `Uvicorn running on http://0.0.0.0:8000`（起動完了。ここから `curl` が通る。コンテナ内では 8000 番で待ち受け、ホストの 11434 番に転送される。コンテナを使わず直接起動した場合は `:11434` と出る）
 
 途中で止まって見えるときは、次で進んでいるかを確かめる。
 
@@ -305,12 +307,12 @@ watch -n 2 free -h
 Modelfile の直接の代わりになる。手順1.5・3 の起動コマンドの `--served-model-name` を次のようにする。`claude-opus-4-6` の部分は、Ollama の Modelfile で付けていた名前と同じにする。
 
 ```bash
-docker run -d --name vllm --gpus all --network host --ipc=host \
+docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   nvcr.io/nvidia/vllm:<タグ> \
   vllm serve Qwen/Qwen3-Coder-Next-FP8 \
     --served-model-name claude-opus-4-6 qwen3-coder-next \
-    --host 0.0.0.0 --port 11434 \
+    --host 0.0.0.0 --port 8000 \
     --gpu-memory-utilization 0.8 \
     --max-model-len 262144 \
     --max-num-seqs 2 \
@@ -532,12 +534,12 @@ sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
 free -h
 
 # 4. gpt-oss-120b で起動（モデルは初回起動時に自動でダウンロードされる）
-docker run -d --name vllm --gpus all --network host --ipc=host \
+docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   nvcr.io/nvidia/vllm:<タグ> \
   vllm serve openai/gpt-oss-120b \
     --served-model-name gpt-oss-120b \
-    --host 0.0.0.0 --port 11434 \
+    --host 0.0.0.0 --port 8000 \
     --gpu-memory-utilization 0.7 \
     --max-model-len 131072 \
     --max-num-seqs 2 \
