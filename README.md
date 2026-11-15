@@ -10,7 +10,7 @@ LangGraph は、その外側で並列制御・差分スキップ・検証・計�
 同じ仕組みで、**ソースファイルにコメントを追記するスキル**も一括で実行できる（`CLAUDE_COMMENT_SKILL_PATH` を設定した場合。[コメント追記](#コメント追記)を参照）。
 
 runner は常駐サービスではなく、起動すると対象ファイルを処理して終了する**バッチ**である（常駐するのは推論サーバー（vLLM）と Web 画面だけ）。
-必要なときに起動するか、[定期実行（systemd タイマー）](#定期実行systemd-タイマー) で毎晩自動実行する。
+必要なときに起動するか、Web 画面の「定期実行」で毎日決まった時刻に自動実行する（[docs/other/web_ui.md](docs/other/web_ui.md)）。
 
 ## 設計方針（方式A：1ファイル = 1セッション）
 
@@ -184,7 +184,7 @@ diff -ru /srv/repos/myapp/user_api/pkg/handler /opt/Batch_Exec/out/_commented/us
 
 **手順6. 完了**
 
-以降は、手動実行・夜間の定期実行のどちらでも、設計書と一緒にコメント追記が行われる（`--tasks` の指定は不要）。
+以降は、手動実行・定期実行のどちらでも、設計書と一緒にコメント追記が行われる（`--tasks` の指定は不要）。
 試した3ファイルは記録済みのため、次回の実行ではソースが変わらない限りスキップされる。
 コメント追記を止めるには、`.env` の `CLAUDE_COMMENT_SKILL_PATH` の行を削除する（`skills/comment-batch/` に置いている場合は、そのフォルダも移すか、Web 画面の「登録を外す」を使う）。
 
@@ -203,11 +203,11 @@ diff -ru /srv/repos/myapp/user_api/pkg/handler /opt/Batch_Exec/out/_commented/us
 # PoC: まず5本だけ
 python -m godoc_agent.runner --repo /srv/repos/myapp --out ./out --limit 5
 
-# 全件（夜間バッチ）
-python -m godoc_agent.runner --repo /srv/repos/myapp --out ./out --run-id nightly-20261102
+# 全件
+python -m godoc_agent.runner --repo /srv/repos/myapp --out ./out --run-id full-20261102
 
 # 途中で止まった・失敗があった場合は同じコマンドで再実行（完了済みは飛ばし、残りを最初から処理する）
-python -m godoc_agent.runner --repo /srv/repos/myapp --out ./out --run-id nightly-20261102
+python -m godoc_agent.runner --repo /srv/repos/myapp --out ./out --run-id full-20261102
 
 # タスクを選んで実行（省略時は doc と、コメント追記スキル（CLAUDE_COMMENT_SKILL_PATH または skills/comment-batch/SKILL.md）があれば comment も）
 python -m godoc_agent.runner --repo /srv/repos/myapp --out ./out --tasks comment
@@ -218,7 +218,7 @@ python -m godoc_agent.runner --repo /srv/repos/myapp --out ./out --tasks doc,tes
 
 - `--limit` はファイル×タスクの件数で数える（両方のタスクを実行する場合、`--limit 5` は約2.5ファイル分）
 - 並列数（`--concurrency`。1〜10、既定 10）はタスクをまたいだ合計。両方のタスクを実行すると Claude Code の実行回数はおよそ2倍になる
-- さらに、サーバー全体（Web 画面の複数人の実行・夜間バッチ・コマンドの合計）でも同時に 10 セッションまでに抑える。空きがなければ空くまで待つ
+- さらに、サーバー全体（Web 画面の複数人の実行・定期実行・コマンドの合計）でも同時に 10 セッションまでに抑える。空きがなければ空くまで待つ
 - 入力がコンテキスト（`LLM_NUM_CTX` = vLLM の `--max-model-len`、256K）を超えるファイルは、失敗にせず**警告付きでスキップ**して次のファイルへ進む（計測ログの `status` が `too_large` / `context_overflow`、`warnings` に理由）
 
 終了コード: `0` 全件成功（警告付きのスキップを含む） / `1` 一部失敗（詳細は計測ログ） / `2` 設定・接続エラー、または同じ出力先で別の実行が進行中のため開始できず
@@ -231,11 +231,11 @@ GB10 上で Web 画面を常駐させると、クライアント PC のブラウ
 - スキル（SKILL.md と参照ファイル）の登録。設計書・コメント追記以外のスキルも、名前と出力の種類（文書・コメントだけ変更・コードも変更）を決めて追加できる
 - 対象フォルダ（`--repo`）と出力先フォルダ（`--out`）のダイアログでの選択。クライアント PC のフォルダをアップロードして対象にし、生成物を ZIP でまとめて持ち帰ることもできる
 - 対象の設定（targets.toml）の編集と、対象になるファイルのプレビュー
-- 毎日の定期実行（オン/オフ・時刻・タスク・実行前の git pull）の設定。systemd の夜間タイマーの代わりに使える
+- 毎日の定期実行（オン/オフ・時刻・タスク・実行前の git pull）の設定
 
 閲覧は誰でもでき、実行と設定の変更は管理者パスワードでログインした人だけができる。
 複数人が同時に使える。対象・出力先フォルダはブラウザごとに選び、出力先が違えば同時に実行できる（Claude Code のセッションはサーバー全体で合計10まで）。
-同じ出力先では、Web 画面・コマンド・夜間タイマーの間でも同時に1つしか動かない（runner が出力先ごとにロックを取る）。
+同じ出力先では、Web 画面とコマンドの間でも同時に1つしか動かない（runner が出力先ごとにロックを取る）。
 この版への更新手順は [docs/pr40-42/migration_multi_user.md](docs/pr40-42/migration_multi_user.md)。
 設置・使い方・セキュリティ上の注意は [docs/other/web_ui.md](docs/other/web_ui.md) にまとめている。
 
@@ -268,7 +268,7 @@ Pythonファイルを置くだけでは動かない。最初に1回だけ、次�
 | SKILL.md（設計書・コメント追記）の配置（Web 画面の「スキル」タブから登録できる） | 不要 |
 | Goリポジトリの clone（HTTPS）と、パスワードなしで `git pull` できる設定（アクセストークン。[docs/other/web_ui.md](docs/other/web_ui.md#gitlab-の認証https-とアクセストークン)） | 不要 |
 | GB10 のスリープ無効化（「端末を閉じてよいか」参照） | 要 |
-| 定期実行の設定（使う場合。Web 画面の「定期実行」か「定期実行（systemd タイマー）」） | タイマーなら要 |
+| 定期実行の設定（使う場合。Web 画面の「定期実行」） | 不要 |
 
 準備が済んだ後の運用は、次のとおり。
 
@@ -310,10 +310,10 @@ GB10 の端末で `python -m godoc_agent.runner ...` のように直接起動す
 
 ```bash
 # A. tmux（後から接続して進捗を見られる。推奨）
-tmux new -d -s godoc 'cd /opt/Batch_Exec && mkdir -p out/_runs && .venv/bin/python -m godoc_agent.runner --repo /srv/repos/myapp --out ./out --run-id nightly-20261102 2>&1 | tee out/_runs/nightly-20261102.log'
+tmux new -d -s godoc 'cd /opt/Batch_Exec && mkdir -p out/_runs && .venv/bin/python -m godoc_agent.runner --repo /srv/repos/myapp --out ./out --run-id full-20261102 2>&1 | tee out/_runs/full-20261102.log'
 
 # B. nohup（tmuxがない場合）
-cd /opt/Batch_Exec && mkdir -p out/_runs && nohup .venv/bin/python -m godoc_agent.runner --repo /srv/repos/myapp --out ./out --run-id nightly-20261102 > out/_runs/nightly-20261102.log 2>&1 < /dev/null &
+cd /opt/Batch_Exec && mkdir -p out/_runs && nohup .venv/bin/python -m godoc_agent.runner --repo /srv/repos/myapp --out ./out --run-id full-20261102 > out/_runs/full-20261102.log 2>&1 < /dev/null &
 ```
 
 - `--run-id` は計測ログ・標準出力ログのファイル名になる。同じ値で再実行すると同じログに追記されるので、明示しておくと追いやすい
@@ -323,7 +323,7 @@ cd /opt/Batch_Exec && mkdir -p out/_runs && nohup .venv/bin/python -m godoc_agen
 進捗の確認:
 
 ```bash
-tail -n 20 /opt/Batch_Exec/out/_runs/nightly-20261102.log   # ログの末尾
+tail -n 20 /opt/Batch_Exec/out/_runs/full-20261102.log   # ログの末尾
 tmux attach -t godoc                                        # tmuxの場合（Ctrl-b d で離脱）
 ```
 
@@ -336,7 +336,7 @@ tmux / nohup で起動していれば、**起動後は端末を閉じて GB10 �
 2. サーバーで処理が始まっている
 
    ```bash
-   tail -n 5 /opt/Batch_Exec/out/_runs/nightly-20261102.log
+   tail -n 5 /opt/Batch_Exec/out/_runs/full-20261102.log
    ```
 
    `run_id=... 対象=N 件` の後に `[1/N] done ...` のような進捗行が出ていればよい。すぐに `エラー:` が出ている場合は、vLLM・Claude Code・`.env` の設定を見直す
@@ -383,63 +383,6 @@ tmux / nohup で起動していれば、**起動後は端末を閉じて GB10 �
 - **Web 画面**：生成物の一覧からファイルを選び、「ダウンロード」で保存する（1ファイルずつ）
 - **NAS**：GB10 に NAS をマウントしていれば、出力先を NAS へコピーし、クライアント PC からは NAS の共有フォルダで受け取る（[docs/other/nas_target.md の「生成物を NAS にも置きたい場合」](docs/other/nas_target.md#8-生成物を-nas-にも置きたい場合)）
 - **git**：`--out /srv/repos/myapp/docs/design` のようにGoリポジトリ内へ出力し、サーバーでコミット・push すれば、クライアントは `git pull` で受け取れる（push には書き込み権限のあるトークンが必要。読み取り専用のトークンとは分ける）
-
-## 定期実行（systemd タイマー）
-
-> Web 画面を使う場合は、画面の「定期実行」で同じことができる（時刻などを画面から変えられる）。その場合はこのタイマーは設置しない（設置済みなら `sudo systemctl disable --now godoc-nightly.timer` で止める）。詳しくは [docs/other/web_ui.md](docs/other/web_ui.md) を参照。
-
-毎晩決まった時刻に、Goリポジトリを `git pull` してから設計書を生成する。変更のないファイルはスキップされるため、毎日実行しても処理されるのは変更されたファイルだけ。
-
-| ファイル | 役割 |
-|---|---|
-| [deploy/nightly.sh](deploy/nightly.sh) | `git pull --ff-only` → runner 実行。`git pull` に失敗したら生成しない（古いソースから作らないため） |
-| [deploy/systemd/godoc-nightly.service](deploy/systemd/godoc-nightly.service) | 上のスクリプトを1回実行する（実行ユーザー・Goリポジトリのパスをここで指定） |
-| [deploy/systemd/godoc-nightly.timer](deploy/systemd/godoc-nightly.timer) | 毎日 2:00 に service を起動する |
-
-### 設置
-
-前提：README「サーバー(GB10)へのセットアップ」が済み、手動実行で設計書が生成できていること。
-
-```bash
-cd /opt/Batch_Exec
-
-# 1. .env の CLAUDE_BIN を claude のフルパスにする（systemd の PATH には ~/.local/bin が入らない）
-which claude          # 例: /home/<ユーザー>/.local/bin/claude → CLAUDE_BIN=/home/<ユーザー>/.local/bin/claude
-
-# 2. 実行ユーザーで、Goリポジトリの git pull がパスワード入力なしでできることを確認する
-#    （HTTPS とアクセストークン。設定方法は docs/other/web_ui.md の「GitLab の認証（HTTPS とアクセストークン）」）
-git -C /srv/repos/myapp pull --ff-only
-
-# 3. 手動でスクリプトを試す
-GODOC_REPO=/srv/repos/myapp ./deploy/nightly.sh
-
-# 4. unit ファイルを設置する（実行ユーザーを自分に置き換え）
-sed "s/REPLACE_WITH_USER/$USER/" deploy/systemd/godoc-nightly.service | sudo tee /etc/systemd/system/godoc-nightly.service
-sudo cp deploy/systemd/godoc-nightly.timer /etc/systemd/system/
-sudo systemctl edit --full godoc-nightly.service   # GODOC_REPO（・GODOC_OUT）を実際のパスに直す
-
-# 5. タイマーを有効化
-sudo systemctl daemon-reload
-sudo systemctl enable --now godoc-nightly.timer
-systemctl list-timers godoc-nightly.timer          # 次回の実行予定を確認
-```
-
-### 運用
-
-```bash
-sudo systemctl start godoc-nightly.service          # 今すぐ1回実行する（終わるまで戻らない。--no-block で即座に戻る）
-systemctl status godoc-nightly.service              # 直近の結果（一部失敗・git pull失敗は failed と表示される）
-journalctl -u godoc-nightly.service -n 50           # 実行ログ
-tail -n 20 /opt/Batch_Exec/out/_runs/nightly-$(date +%Y%m%d).log   # 同じ内容のファイルログ
-sudo systemctl disable --now godoc-nightly.timer    # 定期実行を止める
-```
-
-- 実行時刻を変えるには `sudo systemctl edit --full godoc-nightly.timer` で `OnCalendar=` を直す（例：`*-*-* 23:30:00`）
-- `--run-id` は `nightly-<日付>`。同じ日に `systemctl start` で再実行すると、中断・失敗したファイルだけを最初から処理し、同じ日のログに追記する
-- 実行時刻にサーバーが停止していた場合は、起動後に実行される（`Persistent=true`）
-- 前回の実行が終わっていなければ、次の起動は行われない（systemd が二重起動を防ぐ）。12時間を超えると強制終了する（`TimeoutStartSec=12h`）
-- 夜間実行中に、同じ `--out` へ手動実行を重ねないこと（差分スキップの記録が混ざる）
-- 設計書の取得方法は、手動実行と同じ（「3. 設計書を取得する」）
 
 ## 計測（PoCの判断材料）
 

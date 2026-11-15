@@ -7,7 +7,7 @@ runner（`python -m godoc_agent.runner`）を1回起動したときに、内部�
 
 ```mermaid
 flowchart TD
-    start([起動<br/>手動 / nightly.sh]) --> init[1. 初期化<br/>設定・スキル・claude の確認]
+    start([起動<br/>コマンド / Web 画面]) --> init[1. 初期化<br/>設定・スキル・claude の確認]
     init --> scan[2. 対象ファイルの列挙<br/>差分スキップ・--limit]
     scan -->|対象 0 件| exit0([終了コード 0])
     scan --> pre[3. 事前チェック<br/>Ollama 接続・モデル存在]
@@ -230,24 +230,24 @@ stateDiagram-v2
 | `failed_validation` | validate | `DOC_MAX_ATTEMPTS` 回生成しても検証に通らなかった | 再実行で対象になる |
 | `error` | process_file | Claude Code の異常終了・タイムアウトなどの例外 | 再実行で対象になる |
 
-## 夜間実行の流れ
+## 定期実行の流れ
 
-[deploy/nightly.sh](../deploy/nightly.sh) を systemd タイマー（毎日 2:00）が起動する。
+Web 画面の「定期実行」（[godoc_agent/web/schedule.py](../godoc_agent/web/schedule.py)）が、設定した時刻に起動する。「実行前に git pull」をオンにしていれば [pull_and_run](../godoc_agent/web/pull_and_run.py) を挟む。
 
 ```mermaid
 sequenceDiagram
-    participant T as systemd timer
-    participant S as nightly.sh
+    participant T as 定期実行（Web 画面）
+    participant P as pull_and_run
     participant G as Goリポジトリ
     participant R as runner
-    T->>S: 起動（run_id = nightly-YYYYMMDD）
-    S->>G: git pull --ff-only
+    T->>P: 起動（run_id = scheduled-YYYYMMDD-HHMMSS）
+    P->>G: git pull --ff-only
     alt pull 失敗
-        S-->>T: 生成せずに異常終了（古いソースから作らない）
+        P-->>T: 生成せずに異常終了（古いソースから作らない）
     else pull 成功
-        S->>R: --repo / --out / --run-id を指定して実行
-        R-->>S: 終了コード 0 / 1 / 2
-        S-->>T: 同じ終了コードで終了（ログは journal と _runs/<run_id>.log）
+        P->>R: --repo / --out / --run-id を指定して実行
+        R-->>P: 終了コード 0 / 1 / 2
+        P-->>T: 同じ終了コードで終了（ログは _runs/<run_id>.log と画面の実行履歴）
     end
 ```
 
@@ -260,5 +260,5 @@ sequenceDiagram
 | `<out>/_commented/<相対パス>` | コメント追記済みのファイル（対象リポジトリは書き換えない） |
 | `<out>/_commented/.manifest.json` | コメント追記の差分スキップ用ハッシュ |
 | `<out>/_runs/<run_id>.jsonl` | 計測ログ（1ファイル×タスク = 1行） |
-| `<out>/_runs/<run_id>.log` | 標準出力のログ（tmux / nohup / nightly.sh で起動した場合） |
+| `<out>/_runs/<run_id>.log` | 標準出力のログ（tmux / nohup / Web 画面で起動した場合） |
 | `<out>/_runs/<run_id>.sessions.json` | セッション枠の状況（どの枠で何を処理中か・枠ごとの直近の出来事）。Web 画面のセッション欄が読む |

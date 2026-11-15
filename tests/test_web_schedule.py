@@ -157,7 +157,7 @@ def test_waits_for_running_job_then_runs(sched_client, jobs, clock, monkeypatch)
     assert scheduler(sched_client).tick() is not None
 
 
-def test_waits_while_nightly_or_cli_run_holds_the_lock(sched_client, clock, out_dir):
+def test_waits_while_cli_run_holds_the_lock(sched_client, clock, out_dir):
     save_schedule(sched_client)
     clock.now = datetime(2026, 11, 8, 2, 0)
     with run_lock(out_dir.resolve()):

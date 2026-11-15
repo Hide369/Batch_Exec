@@ -8,7 +8,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-# 設置時に実行ユーザーへ置き換える（夜間バッチと同じユーザーにすると、出力先・スキルの権限がそろう）
+# 設置時に実行ユーザーへ置き換える（コマンドから実行するユーザーと同じにすると、出力先・スキルの権限がそろう）
 User=REPLACE_WITH_USER
 WorkingDirectory=/opt/Batch_Exec
 # 設定（WEB_* など）は /opt/Batch_Exec/.env から読む

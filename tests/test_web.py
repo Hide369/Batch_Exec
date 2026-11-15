@@ -338,12 +338,12 @@ def test_stop_terminates_running_job(admin, jobs, monkeypatch):
     assert start_run(admin).status_code == 202
 
 
-def test_run_is_rejected_while_nightly_or_cli_run_holds_the_lock(admin, out_dir):
+def test_run_is_rejected_while_cli_run_holds_the_lock(admin, out_dir):
     with run_lock(out_dir.resolve()):
         assert admin.get("/api/status").json()["busy_elsewhere"] is True
         res = start_run(admin)
         assert res.status_code == 409
-        assert "夜間バッチ" in res.json()["detail"]
+        assert "コマンドからの実行" in res.json()["detail"]
     assert admin.get("/api/status").json()["busy_elsewhere"] is False
 
 
@@ -770,7 +770,7 @@ async def write_board(out_dir: Path, run_id: str, concurrency: int, busy: list[s
 async def test_sessions_show_occupied_slots_and_per_session_log_while_running(admin, out_dir):
     _, stack = await write_board(out_dir, "r1", 10, ["a.go", "b.go", "c.go"])
     async with stack:
-        with run_lock(out_dir.resolve()):  # 夜間バッチ・コマンドからの実行が動いている
+        with run_lock(out_dir.resolve()):  # コマンドからの実行が動いている
             data = admin.get("/api/runs/r1/sessions").json()
     assert data["running"] is True and data["interrupted"] is False
     assert data["concurrency"] == 10

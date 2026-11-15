@@ -5,12 +5,21 @@ README・docs・systemd のユニットは、すでに `/opt/Batch_Exec` を前�
 
 ## 0. 事前確認
 
-実行中のバッチがないこと（Web 画面の実行履歴、または `systemctl status godoc-nightly.service`）を確認してから行う。
+実行中のバッチがないこと（Web 画面の実行履歴、または `pgrep -af godoc_agent.runner` で何も表示されないこと）を確認してから行う。
+定期実行は Web 画面の「定期実行」で行う（systemd の夜間タイマー `godoc-nightly.timer` は廃止した）。
 
 ## 1. サービスを止める
 
 ```bash
-sudo systemctl stop godoc-web.service godoc-nightly.timer
+sudo systemctl stop godoc-web.service
+```
+
+以前の版で夜間タイマーを設置していた場合は、ここで無効にしてユニットを消す（二重に実行しないため。設置していなければ何も起きない）。
+
+```bash
+sudo systemctl disable --now godoc-nightly.timer 2>/dev/null
+sudo rm -f /etc/systemd/system/godoc-nightly.timer /etc/systemd/system/godoc-nightly.service
+sudo systemctl daemon-reload
 ```
 
 ## 2. フォルダを移し、リモートURLを新しい名前にする
@@ -47,10 +56,10 @@ grep -rn 'Lang_Chain' .env targets.toml 2>/dev/null   # 何も表示されなけ
 
 ```bash
 cd /opt/Batch_Exec
-sudo cp deploy/systemd/godoc-web.service deploy/systemd/godoc-nightly.service deploy/systemd/godoc-nightly.timer /etc/systemd/system/
-sudo sed -i 's|REPLACE_WITH_USER|<実行ユーザー>|' /etc/systemd/system/godoc-web.service /etc/systemd/system/godoc-nightly.service
+sudo cp deploy/systemd/godoc-web.service /etc/systemd/system/
+sudo sed -i 's|REPLACE_WITH_USER|<実行ユーザー>|' /etc/systemd/system/godoc-web.service
 sudo systemctl daemon-reload
-sudo systemctl start godoc-web.service godoc-nightly.timer
+sudo systemctl start godoc-web.service
 ```
 
 ## 6. 動作確認
@@ -61,14 +70,14 @@ systemctl status godoc-web.service --no-pager                # active (running) 
 grep -rn 'Lang_Chain' /etc/systemd/system/godoc-*            # 何も表示されなければよい
 ```
 
-Web 画面を開き、フォルダ選択ダイアログで `/opt/Batch_Exec/out` を選べることを確認する。
+Web 画面を開き、フォルダ選択ダイアログで `/opt/Batch_Exec/out` を選べること、「定期実行」の設定が残っていること（保存先 `state/web` も一緒に移動している）を確認する。
 
 ## 元に戻す方法
 
 ```bash
-sudo systemctl stop godoc-web.service godoc-nightly.timer
+sudo systemctl stop godoc-web.service
 sudo mv /opt/Batch_Exec /opt/Lang_Chain
 cd /opt/Lang_Chain && sed -i 's|/opt/Batch_Exec|/opt/Lang_Chain|g' .env && rm -rf .venv && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
-その後、`/etc/systemd/system/godoc-*` の `/opt/Batch_Exec` を `/opt/Lang_Chain` に戻して `sudo systemctl daemon-reload` し、サービスを起動する。
+その後、`/etc/systemd/system/godoc-web.service` の `/opt/Batch_Exec` を `/opt/Lang_Chain` に戻して `sudo systemctl daemon-reload` し、サービスを起動する。

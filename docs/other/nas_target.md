@@ -33,7 +33,7 @@ NAS（nas01:/volume1/repos） ──LAN──> GB10 の /mnt/nas/repos にマウ
 
 **出力先は NAS にしない**（GB10 のローカルディスクのままにする）。理由は次のとおり。
 
-- 二重実行を防ぐロック（`<出力先>/.runner.lock`）は、NFS・SMB では効かないことがある。効かないと、夜間の実行と Web 画面からの実行が同じ出力先に同時に書き込むおそれがある
+- 二重実行を防ぐロック（`<出力先>/.runner.lock`）は、NFS・SMB では効かないことがある。効かないと、コマンドからの実行と Web 画面からの実行が同じ出力先に同時に書き込むおそれがある
 - 差分スキップ用の manifest は1件ごとに書き換えるため、ネットワーク越しだと遅くなる
 
 生成物を NAS にも置きたい場合は、出力先からコピーする（[8. 生成物を NAS にも置きたい場合](#8-生成物を-nas-にも置きたい場合)）。
@@ -135,7 +135,7 @@ ls /mnt/nas/repos >/dev/null && mountpoint /mnt/nas/repos   # アクセスする
 
 ## 5. サービスがマウントを待つようにする
 
-Web 画面（と、使っている場合は夜間タイマー）が、NAS のマウントを前提に起動するよう設定する。
+Web 画面が、NAS のマウントを前提に起動するよう設定する。
 
 ```bash
 sudo systemctl edit godoc-web.service
@@ -146,18 +146,6 @@ sudo systemctl edit godoc-web.service
 ```ini
 [Unit]
 RequiresMountsFor=/mnt/nas/repos
-```
-
-夜間タイマー（`godoc-nightly.service`）を使っている場合は、同じ設定を入れる。あわせて、`.env` の対象（`GODOC_REPO=/mnt/nas/repos/myapp`）を NAS 上のパスにする（設定は `.env` に一本化しているため、ユニットには `Environment=` を書かない）。
-
-```bash
-sudo systemctl edit godoc-nightly.service
-```
-
-```ini
-[Unit]
-RequiresMountsFor=/mnt/nas/repos
-
 ```
 
 反映する。
@@ -251,7 +239,7 @@ sudo -u <実行ユーザー> crontab -e
 
 ```bash
 # 1. Web 画面で、対象フォルダをローカルのフォルダに選び直す
-# 2. サービスの追加設定を消す（godoc-nightly.service も同様。GODOC_REPO は元に戻す）
+# 2. サービスの追加設定を消す
 sudo systemctl revert godoc-web.service
 # 3. マウントを外し、fstab を元に戻す
 sudo umount /mnt/nas/repos
