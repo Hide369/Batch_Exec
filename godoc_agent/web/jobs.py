@@ -133,7 +133,7 @@ class JobManager:
         running = self.running_jobs()
         return {
             "job": job.to_dict() if job else None,
-            # Web 以外（夜間バッチ・コマンド）から、選んでいる出力先で実行が動いているか
+            # Web 以外（コマンド）から、選んでいる出力先で実行が動いているか
             "busy_elsewhere": not (job and job.running) and out_dir is not None and is_locked(out_dir),
             # 他の人が別の出力先で動かしている実行（Claude Code のセッションはサーバー全体で取り合う）
             "others": [
@@ -156,7 +156,7 @@ class JobManager:
             if len(self.running_jobs()) >= MAX_RUNNING_JOBS:
                 raise JobBusy(f"同時に実行できるのは {MAX_RUNNING_JOBS} 件までです。どれかが終了してから実行してください")
             if is_locked(out_dir):
-                raise JobBusy("別の実行（夜間バッチ・コマンドからの実行）が進行中です。終了してから実行してください")
+                raise JobBusy("別の実行（コマンドからの実行）が進行中です。終了してから実行してください")
 
             runs_dir = out_dir / "_runs"
             runs_dir.mkdir(parents=True, exist_ok=True)
@@ -283,7 +283,7 @@ class JobManager:
         job = self._jobs.get(run_id)
         if job is not None and job.out_dir == out_dir:
             alive = job.running
-        else:  # 夜間バッチ・コマンドからの実行。出力先のロックで判断する
+        else:  # コマンドからの実行。出力先のロックで判断する
             alive = is_locked(out_dir)
         data["interrupted"] = bool(data.get("running")) and not alive
         data["running"] = bool(data.get("running")) and alive
@@ -295,7 +295,7 @@ class JobManager:
 
     @staticmethod
     def history(out_dir: Path, limit: int = 30) -> list[dict]:
-        """過去の実行（Web・夜間バッチ・コマンド）を新しい順に返す。件数は計測ログから数える。"""
+        """過去の実行（Web・コマンド）を新しい順に返す。件数は計測ログから数える。"""
         runs_dir = out_dir / "_runs"
         if not runs_dir.is_dir():
             return []

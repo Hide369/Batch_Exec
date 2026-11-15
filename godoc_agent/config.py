@@ -20,7 +20,7 @@ def _int_env(name: str, default: int, minimum: int = 1, maximum: int | None = No
     return value
 
 
-# 同時に動かす Claude Code のセッション数の上限（サーバー全体の合計。Web 画面の複数の実行・夜間バッチ・
+# 同時に動かす Claude Code のセッション数の上限（サーバー全体の合計。Web 画面の複数の実行・
 # コマンドからの実行をまたいで数える。slots.py を参照）。vLLM 側では同時処理数を絞っていないため、
 # GPU メモリ（並列数に比例して KV キャッシュが増える）の現実的な範囲としてアプリ側で抑える
 MAX_CONCURRENCY = 10
@@ -43,7 +43,7 @@ def _ratio_env(name: str, default: float) -> float:
 # 設計書スキルはすべての言語で共通。置き場所を固定し、.env での指定を不要にする
 DESIGN_SKILL_NAME = "design-doc-batch"
 # コメント追記スキルの既定の置き場所。ここに SKILL.md があれば、.env で指定しなくてもコメント追記を実行する
-# （Web 画面から登録したスキルを、夜間バッチやコマンドからの実行でも同じように使うため）
+# （Web 画面から登録したスキルを、コマンドからの実行でも同じように使うため）
 COMMENT_SKILL_NAME = "comment-batch"
 
 

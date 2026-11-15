@@ -83,7 +83,7 @@ async def test_generates_docs_and_skips_unchanged_files_next_time(env, monkeypat
 async def test_refuses_to_run_while_another_run_uses_the_same_out_dir(env, monkeypatch, repo, tmp_path):
     out = tmp_path / "out"
     use_llm(monkeypatch, ScriptedLLM([]))
-    # 夜間バッチや Web 画面からの実行が同じ出力先で動いている状態
+    # コマンドや Web 画面からの実行が同じ出力先で動いている状態
     with run_lock(out):
         with pytest.raises(RunLockBusy):
             await run_batch(repo, out)

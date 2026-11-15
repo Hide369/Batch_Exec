@@ -410,7 +410,7 @@ async function refreshStatus() {
   const running = job?.running ?? false;
   let status;
   if (running) status = badge(job.stop_requested ? "停止中…" : "実行中", "running");
-  else if (busyElsewhere) status = badge("他の実行が進行中（夜間バッチ・コマンド）", "warn");
+  else if (busyElsewhere) status = badge("他の実行が進行中（コマンド）", "warn");
   else if (job && job.exit_code === 0) status = badge("完了", "ok");
   else if (job && job.stop_requested) status = badge("停止しました", "warn");
   else if (job) status = badge(`失敗（終了コード ${job.exit_code}）`, "fail");
@@ -712,7 +712,7 @@ $("targets-preview").addEventListener("click", async () => {
 });
 
 $("targets-save").addEventListener("click", async () => {
-  if (!confirm("対象の設定を保存しますか？（夜間バッチ・コマンドからの実行にも反映されます。ファイル内のコメントは消えます）")) return;
+  if (!confirm("対象の設定を保存しますか？（定期実行・コマンドからの実行にも反映されます。ファイル内のコメントは消えます）")) return;
   try {
     state.targets = await send("PUT", "/api/targets", { config: collectTargets() });
     renderTargets(state.targets.config);

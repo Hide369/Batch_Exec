@@ -1,6 +1,6 @@
 """画面からのスキル（SKILL.md と参照ファイル一式）の登録。
 
-runner が読む場所にそのまま置くので、Web 画面以外（夜間バッチ・コマンド）からの実行でも同じスキルが使われる。
+runner が読む場所にそのまま置くので、Web 画面以外（コマンド）からの実行でも同じスキルが使われる。
   設計書（doc）       … CLAUDE_SKILL_PATH のフォルダ、未設定なら skills/design-doc-batch/
   コメント追記（comment） … CLAUDE_COMMENT_SKILL_PATH のフォルダ、未設定なら skills/comment-batch/
   追加のスキル          … skills/<スキル名>/。名前・出力の種類・表示名は skills/registry.json に記録する

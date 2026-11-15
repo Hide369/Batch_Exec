@@ -133,7 +133,7 @@ def test_reupload_is_refused_while_its_output_is_running(make_app, jobs, monkeyp
     assert start_run(alice).status_code == 202
     res = upload(alice, "my_app", SOURCES)
     assert res.status_code == 409
-    # 夜間バッチ・コマンドが同じ出力先で動いているときも同じ
+    # コマンドからの実行が同じ出力先で動いているときも同じ
     jobs.stop(jobs.job_for(out).run_id)
     jobs.job_for(out).proc.wait(timeout=20)
     with run_lock(out):

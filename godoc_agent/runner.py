@@ -10,7 +10,7 @@
     python -m godoc_agent.runner --repo /path/to/repo --out ./out --concurrency 4         # 同時に4セッション
 
 同時セッション数は、1回の実行につき --concurrency（既定 10）まで、さらにサーバー全体（Web 画面の複数の実行・
-夜間バッチ・コマンドの合計）で 10 まで（slots.py）。入力がコンテキストを超えるファイルは、失敗にせず警告付きでスキップする。
+コマンドの合計）で 10 まで（slots.py）。入力がコンテキストを超えるファイルは、失敗にせず警告付きでスキップする。
 """
 
 import argparse
@@ -256,7 +256,7 @@ async def run(args: argparse.Namespace, settings: Settings) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "_runs").mkdir(exist_ok=True)
 
-    # Web 画面・コマンド・夜間タイマーのどこから起動しても、同じ出力先では1つずつしか実行しない
+    # Web 画面・コマンドのどちらから起動しても、同じ出力先では1つずつしか実行しない
     with run_lock(out_dir):
         return await _run_batch(args, settings, repo, out_dir)
 

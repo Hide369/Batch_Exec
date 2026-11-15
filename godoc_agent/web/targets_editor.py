@@ -1,7 +1,7 @@
 """画面からの対象設定（targets.toml）の読み書きと、対象ファイルのプレビュー。
 
 保存先は runner と同じ（TARGETS_CONFIG、未設定なら <アプリ>/targets.toml）なので、
-夜間バッチ・コマンドからの実行にも反映される。検証は runner と同じ処理（targets._parse_targets）で行う。
+定期実行・コマンドからの実行にも反映される。検証は runner と同じ処理（targets._parse_targets）で行う。
 画面から保存すると、ファイル内のコメントは失われる（項目の値だけを書き出す）。
 """
 

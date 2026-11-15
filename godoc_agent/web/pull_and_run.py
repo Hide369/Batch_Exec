@@ -1,6 +1,6 @@
 """対象リポジトリを `git pull --ff-only` で最新にしてから runner を起動する。
 
-Web 画面の「実行前に git pull」と定期実行で使う（deploy/nightly.sh と同じ流れ）。
+Web 画面の「実行前に git pull」と定期実行で使う。
 - pull の前に、対象フォルダがクローンしたリポジトリの最上位フォルダであることを確かめ、pull 先をログに出す
   （上位の別のリポジトリを pull してしまうのを防ぐため。git_repo.py を参照）
 - 古いソースから設計書を作らないよう、確認や git pull に失敗したら runner は起動しない
