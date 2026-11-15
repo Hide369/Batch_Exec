@@ -146,13 +146,13 @@ sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
 free -h
 
 # 4. Gemma 4 31B で起動（Qwen3-Coder-Next のときと変わるのはモデル・コンテキスト長・パーサだけ）
-docker run -d --name vllm --gpus all --network host --ipc=host \
+docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   -e HF_HUB_OFFLINE=1 \
   nvcr.io/nvidia/vllm:26.10-py3 \
   vllm serve google/gemma-4-31B-it \
     --served-model-name claude-opus-4-6 gemma-4-31b \
-    --host 0.0.0.0 --port 11434 \
+    --host 0.0.0.0 --port 8000 \
     --gpu-memory-utilization 0.75 \
     --max-model-len 131072 \
     --kv-cache-dtype fp8 \
@@ -172,6 +172,7 @@ Qwen3-Coder-Next の起動コマンドとの違いは次のとおり。
 | `--max-model-len` | 262144 | 131072 | Gemma 4 31B の上限 |
 | `--limit-mm-per-prompt` | なし | 画像 0 | Gemma 4 は画像入力つきのモデル。テキストだけ使うので、画像用のメモリを取らない |
 | `--tool-call-parser` | `qwen3_coder` | `gemma4` | Gemma 4 はツール呼び出しの書式が違う |
+| ポート | `--network host`・`--port 11434` | `-p 11434:8000`・`--port 8000` | コンテナ内の vLLM は 8000 番で待ち受け、ホストの 11434 番に転送する。アプリ・`curl` からの接続先は今までどおり 11434 番。`-p` は `--network host` と一緒には効かないので、`--network host` は外す |
 | `-e HF_HUB_OFFLINE=1` | なし | あり | 手順1でダウンロード済みのものだけを使い、起動時にネットへ取りに行かない |
 
 - `--reasoning-parser` は付けない。Claude Code のシンキングは止めてある（アプリは `MAX_THINKING_TOKENS=0` を渡す）ので不要。Gemma 4 のシンキングはリクエストで指定したときだけ有効になる
@@ -186,13 +187,13 @@ Qwen3-Coder-Next の起動コマンドとの違いは次のとおり。
 docker pull vllm/vllm-openai:gemma4-cu130
 
 docker rm -f vllm
-docker run -d --name vllm --gpus all --network host --ipc=host \
+docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   -e HF_HUB_OFFLINE=1 \
   vllm/vllm-openai:gemma4-cu130 \
     --model google/gemma-4-31B-it \
     --served-model-name claude-opus-4-6 gemma-4-31b \
-    --host 0.0.0.0 --port 11434 \
+    --host 0.0.0.0 --port 8000 \
     --gpu-memory-utilization 0.75 \
     --max-model-len 131072 \
     --kv-cache-dtype fp8 \
@@ -276,12 +277,12 @@ Qwen3-Coder-Next のモデルは消していないので、起動し直して `.
 docker rm -f vllm
 
 # 2. Qwen3-Coder-Next で起動（vllm_migration.md の手順5・案1と同じコマンド）
-docker run -d --name vllm --gpus all --network host --ipc=host \
+docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   nvcr.io/nvidia/vllm:26.10-py3 \
   vllm serve Qwen/Qwen3-Coder-Next-FP8 \
     --served-model-name claude-opus-4-6 qwen3-coder-next \
-    --host 0.0.0.0 --port 11434 \
+    --host 0.0.0.0 --port 8000 \
     --gpu-memory-utilization 0.8 \
     --max-model-len 262144 \
     --kv-cache-dtype fp8 \
