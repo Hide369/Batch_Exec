@@ -37,7 +37,7 @@ curl -s http://127.0.0.1:11434/v1/messages \
 | どちらも JSON が返る | 次へ進む |
 | `Connection refused` | vLLM が止まっている。[vllm_migration.md](vllm_migration.md) の手順3で起動する |
 | `/v1/models` に別の名前しか出ない | vLLM を `--served-model-name claude-opus-4-6` で起動し直す（または後の `.env` の `LLM_MODEL` を出ている名前に合わせる） |
-| `/v1/messages` だけ `404` | vLLM が古く Anthropic 互換API がない。新しいタグのコンテナで起動し直す |
+| `/v1/messages` だけ `404` | vLLM が古く Anthropic 互換API がない。イメージが `26.10-py3` になっているか確かめ、そのイメージで起動し直す |
 
 ### 1-2. 実行中のバッチがないこと
 

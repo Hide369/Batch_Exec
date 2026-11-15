@@ -54,14 +54,19 @@ Gemma 4 は Gemma 3 までと違い Apache-2.0 で公開されており、通常
 # ディスクの空き（Gemma 4 31B BF16 は約62GB。Qwen3-Coder-Next の約85GB は残すので、合わせて置けるか）
 df -h ~
 
-# 今の vLLM のイメージのタグとバージョン（0.19.0 以上なら、このイメージのまま Gemma 4 を動かせる見込み）
+# 今の vLLM のイメージのタグ（26.10-py3 でなければ、下の docker pull で取得する）
 docker inspect vllm --format '{{.Config.Image}}'
-docker run --rm nvcr.io/nvidia/vllm:<タグ> vllm --version
-docker run --rm nvcr.io/nvidia/vllm:<タグ> python3 -c "import transformers; print(transformers.__version__)"
+
+# 26.10-py3 のイメージを取得し、vLLM と transformers のバージョンを確かめる
+docker pull nvcr.io/nvidia/vllm:26.10-py3
+docker run --rm nvcr.io/nvidia/vllm:26.10-py3 vllm --version
+docker run --rm nvcr.io/nvidia/vllm:26.10-py3 python3 -c "import transformers; print(transformers.__version__)"
 ```
 
 - [ ] ディスクの空きが 80GB 以上ある
-- [ ] vLLM が 0.19.0 以上、transformers が 5 以上（満たさない場合は、NGC の新しいタグにするか、手順2の「別のイメージを使う場合」を使う）
+- [ ] vLLM が 0.19.0 以上、transformers が 5 以上（満たさない場合は、手順2の「別のイメージを使う場合」を使う）
+
+コンテナイメージのタグは、この手順書ではすべて `26.10-py3` を使う。タグは NGC カタログの vLLM コンテナのタグ一覧（<https://catalog.ngc.nvidia.com/orgs/nvidia/-/containers/vllm/-/tags>）から取得したもの。
 
 ## 手順1: Gemma 4 31B を先にダウンロードする
 
@@ -87,7 +92,7 @@ curl -sI https://huggingface.co/google/gemma-4-31B-it/resolve/main/config.json |
 # 進捗バー付きでダウンロード（途中で止まっても再実行すれば続きから再開する）
 docker run --rm -it \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
-  nvcr.io/nvidia/vllm:<タグ> \
+  nvcr.io/nvidia/vllm:26.10-py3 \
   hf download google/gemma-4-31B-it
 # hf コマンドがないと出た場合は huggingface-cli download に置き換える
 # 速度重視の NVFP4 版も試す場合は、続けて hf download nvidia/Gemma-4-31B-IT-NVFP4
@@ -101,7 +106,7 @@ mkdir -p ~/models
 # 例1: Hugging Face の再配布版（ログイン不要）
 docker run --rm -it \
   -v ~/models:/models \
-  nvcr.io/nvidia/vllm:<タグ> \
+  nvcr.io/nvidia/vllm:26.10-py3 \
   hf download unsloth/Gemma-4-31B-it --local-dir /models/gemma-4-31B-it
 
 # 例2: ModelScope（ログイン不要。<リポジトリ名> はサイトで確認したもの）
@@ -119,7 +124,7 @@ du -sh ~/models/gemma-4-31B-it                                   # フォルダ�
 ls ~/.cache/huggingface/hub/models--google--gemma-4-31B-it/snapshots/*/
 
 # Qwen3-Coder-Next が影響なく動き続けているか
-curl -s http://localhost:8000/v1/models
+curl -s http://localhost:11434/v1/models
 ```
 
 - [ ] ダウンロードしたフォルダの大きさが約62GBで、`*.safetensors` がそろっている
@@ -141,16 +146,15 @@ sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
 free -h
 
 # 4. Gemma 4 31B で起動（Qwen3-Coder-Next のときと変わるのはモデル・コンテキスト長・パーサだけ）
-docker run -d --name vllm --gpus all --network host --ipc=host \
+docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   -e HF_HUB_OFFLINE=1 \
-  nvcr.io/nvidia/vllm:<タグ> \
+  nvcr.io/nvidia/vllm:26.10-py3 \
   vllm serve google/gemma-4-31B-it \
-    --served-model-name claude-sonnet-4-5 gemma-4-31b \
+    --served-model-name claude-opus-4-6 gemma-4-31b \
     --host 0.0.0.0 --port 8000 \
     --gpu-memory-utilization 0.75 \
     --max-model-len 131072 \
-    --max-num-seqs 2 \
     --kv-cache-dtype fp8 \
     --limit-mm-per-prompt '{"image": 0}' \
     --enable-auto-tool-choice --tool-call-parser gemma4
@@ -163,11 +167,12 @@ Qwen3-Coder-Next の起動コマンドとの違いは次のとおり。
 | 引数 | Qwen3-Coder-Next | Gemma 4 31B | 理由 |
 | --- | --- | --- | --- |
 | モデル | `Qwen/Qwen3-Coder-Next-FP8` | `google/gemma-4-31B-it` | — |
-| `--served-model-name` | `claude-sonnet-4-5 qwen3-coder-next` | `claude-sonnet-4-5 gemma-4-31b` | 先頭の名前を同じにしておけば、アプリの `LLM_MODEL` は変えなくてよい |
+| `--served-model-name` | `claude-opus-4-6 qwen3-coder-next` | `claude-opus-4-6 gemma-4-31b` | 先頭の名前を同じにしておけば、アプリの `LLM_MODEL` は変えなくてよい |
 | `--gpu-memory-utilization` | 0.8 | 0.75 | 重みが約62GBと小さい。GB10 で Gemma 4 31B を高い割合で動かすと OS が固まる報告があるため、低めにする |
 | `--max-model-len` | 262144 | 131072 | Gemma 4 31B の上限 |
 | `--limit-mm-per-prompt` | なし | 画像 0 | Gemma 4 は画像入力つきのモデル。テキストだけ使うので、画像用のメモリを取らない |
 | `--tool-call-parser` | `qwen3_coder` | `gemma4` | Gemma 4 はツール呼び出しの書式が違う |
+| ポート | `--network host`・`--port 11434` | `-p 11434:8000`・`--port 8000` | コンテナ内の vLLM は 8000 番で待ち受け、ホストの 11434 番に転送する。アプリ・`curl` からの接続先は今までどおり 11434 番。`-p` は `--network host` と一緒には効かないので、`--network host` は外す |
 | `-e HF_HUB_OFFLINE=1` | なし | あり | 手順1でダウンロード済みのものだけを使い、起動時にネットへ取りに行かない |
 
 - `--reasoning-parser` は付けない。Claude Code のシンキングは止めてある（アプリは `MAX_THINKING_TOKENS=0` を渡す）ので不要。Gemma 4 のシンキングはリクエストで指定したときだけ有効になる
@@ -182,16 +187,15 @@ Qwen3-Coder-Next の起動コマンドとの違いは次のとおり。
 docker pull vllm/vllm-openai:gemma4-cu130
 
 docker rm -f vllm
-docker run -d --name vllm --gpus all --network host --ipc=host \
+docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   -e HF_HUB_OFFLINE=1 \
   vllm/vllm-openai:gemma4-cu130 \
     --model google/gemma-4-31B-it \
-    --served-model-name claude-sonnet-4-5 gemma-4-31b \
+    --served-model-name claude-opus-4-6 gemma-4-31b \
     --host 0.0.0.0 --port 8000 \
     --gpu-memory-utilization 0.75 \
     --max-model-len 131072 \
-    --max-num-seqs 2 \
     --kv-cache-dtype fp8 \
     --limit-mm-per-prompt '{"image": 0}' \
     --enable-auto-tool-choice --tool-call-parser gemma4
@@ -203,44 +207,43 @@ docker run -d --name vllm --gpus all --network host --ipc=host \
 
 ```bash
 # 1. 別名が一覧に出るか
-curl http://localhost:8000/v1/models
+curl http://localhost:11434/v1/models
 
 # 2. 応答が返るか
-curl http://localhost:8000/v1/chat/completions \
+curl http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"こんにちは"}],"max_tokens":64}'
+  -d '{"model":"claude-opus-4-6","messages":[{"role":"user","content":"こんにちは"}],"max_tokens":64}'
 
 # 3. ツール呼び出しが返るか（tool_calls に get_weather が入ればよい）
-curl http://localhost:8000/v1/chat/completions \
+curl http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"東京の天気を調べて"}],
+  -d '{"model":"claude-opus-4-6","messages":[{"role":"user","content":"東京の天気を調べて"}],
        "tools":[{"type":"function","function":{"name":"get_weather","description":"天気を返す",
        "parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],
        "max_tokens":256}'
 
 # 4. Claude Code のヘッドレスモードで届くか
-ANTHROPIC_BASE_URL=http://127.0.0.1:8000 ANTHROPIC_AUTH_TOKEN=local ANTHROPIC_API_KEY= \
+ANTHROPIC_BASE_URL=http://127.0.0.1:11434 ANTHROPIC_AUTH_TOKEN=local ANTHROPIC_API_KEY= \
 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 MAX_THINKING_TOKENS=0 \
-  claude -p "こんにちは。1行で返答してください。" --model claude-sonnet-4-5
+  claude -p "こんにちは。1行で返答してください。" --model claude-opus-4-6
 
 # 推論中にもう一つの端末でメモリを監視
 watch -n 2 free -h
 ```
 
-- [ ] `/v1/models` に `claude-sonnet-4-5` と `gemma-4-31b` が出る
+- [ ] `/v1/models` に `claude-opus-4-6` と `gemma-4-31b` が出る
 - [ ] ツール呼び出しのテストで `tool_calls` が返る（本文に `<|tool_call>` のような文字がそのまま出る場合は、下のトラブルシューティングを見る）
 - [ ] `claude -p` が応答する
 - [ ] 推論中も `available` が 10GB 以上残っている
 
 ## 手順4: アプリの `.env` を合わせる
 
-`--served-model-name` の先頭を `claude-sonnet-4-5` のままにしたので、`LLM_MODEL` は変えなくてよい。コンテキスト長だけ合わせる。
+`--served-model-name` の先頭を `claude-opus-4-6` のままにしたので、`LLM_MODEL` は変えなくてよい。コンテキスト長だけ合わせる。
 
 ```bash
 # /opt/Batch_Exec/.env
-LLM_MODEL=claude-sonnet-4-5     # 変えない（--served-model-name の先頭と同じ）
+LLM_MODEL=claude-opus-4-6       # 変えない（--served-model-name の先頭と同じ）
 LLM_NUM_CTX=131072              # 262144 から変更（--max-model-len と同じ）
-LLM_CONCURRENCY=2               # 変えない（--max-num-seqs と同じ）
 ```
 
 ```bash
@@ -254,7 +257,7 @@ sudo systemctl start godoc-nightly.timer # 止めていた場合
 
 | 症状 | 考えられる原因 | 対処 |
 | --- | --- | --- |
-| 起動時に `gemma4` が見つからない・アーキテクチャ未対応と出る | イメージの vLLM（0.19.0 未満）か transformers（5 未満）が古い | NGC の新しいタグにするか、手順2の「別のイメージを使う場合」を使う |
+| 起動時に `gemma4` が見つからない・アーキテクチャ未対応と出る | イメージの vLLM（0.19.0 未満）か transformers（5 未満）が古い | イメージが `26.10-py3` になっているか確かめる。それでも出る場合は、手順2の「別のイメージを使う場合」を使う |
 | 起動時に `LocalEntryNotFoundError` などで落ちる | `HF_HUB_OFFLINE=1` なのに、モデルがキャッシュにない | 手順1のダウンロードが終わっているか、`du -sh` で確認する |
 | モデルのダウンロードが `401` や `gated` で失敗する | Hugging Face 側でログインを求められた | 「アカウント登録の要否」の再配布版や ModelScope から入手する |
 | 応答の本文に `<\|tool_call>` などがそのまま出て、ツールが実行されない | ツール呼び出しの解釈の不具合、またはチャットテンプレートの違い | 新しいイメージにする。それでも出る場合は、vLLM 同梱の `tool_chat_template_gemma4.jinja` を探して `--chat-template <パス>` を足す（`docker run --rm --entrypoint find <イメージ> / -name tool_chat_template_gemma4.jinja`） |
@@ -262,7 +265,7 @@ sudo systemctl start godoc-nightly.timer # 止めていた場合
 | 推論中に OS が固まる | メモリの使いすぎ（GB10 で Gemma 4 31B を高い割合で動かすと固まる報告がある） | 再起動後、`--gpu-memory-utilization 0.7`・`--max-model-len 65536` で起動し直す（`LLM_NUM_CTX` も合わせる） |
 | `No available memory for the cache blocks` | KV キャッシュの余地がない | `--max-model-len` を下げる |
 | 生成が非常に遅い | 31B Dense は GB10 では遅い（モデルの性質） | NVFP4 版（`nvidia/Gemma-4-31B-IT-NVFP4`）に替える |
-| 実行がすぐ `モデル 'xxx' が推論サーバーにありません` で終わる | `LLM_MODEL` と `--served-model-name` が違う | `--served-model-name` の先頭を `claude-sonnet-4-5` にする |
+| 実行がすぐ `モデル 'xxx' が推論サーバーにありません` で終わる | `LLM_MODEL` と `--served-model-name` が違う | `--served-model-name` の先頭を `claude-opus-4-6` にする |
 
 ## Qwen3-Coder-Next に戻す手順（いつでも実行可）
 
@@ -273,15 +276,14 @@ Qwen3-Coder-Next のモデルは消していないので、起動し直して `.
 docker rm -f vllm
 
 # 2. Qwen3-Coder-Next で起動（vllm_migration.md の手順5・案1と同じコマンド）
-docker run -d --name vllm --gpus all --network host --ipc=host \
+docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
-  nvcr.io/nvidia/vllm:<タグ> \
+  nvcr.io/nvidia/vllm:26.10-py3 \
   vllm serve Qwen/Qwen3-Coder-Next-FP8 \
-    --served-model-name claude-sonnet-4-5 qwen3-coder-next \
+    --served-model-name claude-opus-4-6 qwen3-coder-next \
     --host 0.0.0.0 --port 8000 \
     --gpu-memory-utilization 0.8 \
     --max-model-len 262144 \
-    --max-num-seqs 2 \
     --kv-cache-dtype fp8 \
     --enable-auto-tool-choice --tool-call-parser qwen3_coder
 
@@ -300,6 +302,7 @@ docker rmi vllm/vllm-openai:gemma4-cu130                                   # 別
 
 ## 参照
 
+- [NGC カタログの vLLM コンテナのタグ一覧](https://catalog.ngc.nvidia.com/orgs/nvidia/-/containers/vllm/-/tags)
 - [vLLM の Gemma 4 31B レシピ](https://recipes.vllm.ai/Google/gemma-4-31B-it)
 - [NVIDIA DGX Spark vLLM プレイブック（Gemma 4 用のイメージの案内）](https://build.nvidia.com/spark/vllm/instructions)
 - [DGX Spark での Gemma 4 31B の報告（NVIDIA フォーラム）](https://forums.developer.nvidia.com/t/gemma-4-31b-on-dgx-spark-runtime-fp8-benchmarks-single-dual-node-tp-2/365814)
