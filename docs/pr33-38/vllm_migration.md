@@ -117,14 +117,14 @@ GB10（Blackwell、ARM64）では、NVIDIA が公開している vLLM コンテ�
 # Docker（DGX OS に同梱）を確認。permission denied なら sudo を付けるか docker グループに入る
 docker --version
 
-# タグは NGC カタログ（https://catalog.ngc.nvidia.com/orgs/nvidia/containers/vllm）の最新を使う
-docker pull nvcr.io/nvidia/vllm:<タグ>
+# タグは NGC カタログのタグ一覧（https://catalog.ngc.nvidia.com/orgs/nvidia/-/containers/vllm/-/tags）から取得した 26.10-py3 を使う
+docker pull nvcr.io/nvidia/vllm:26.10-py3
 
-# Qwen3-Coder-Next には vLLM 0.15.0 以上が必要。古ければ新しいタグを選び直す
-docker run --rm nvcr.io/nvidia/vllm:<タグ> vllm --version
+# Qwen3-Coder-Next には vLLM 0.15.0 以上が必要。バージョンを確かめる
+docker run --rm nvcr.io/nvidia/vllm:26.10-py3 vllm --version
 
 # コンテナから GB10 の GPU が見えるか
-docker run --rm --gpus all nvcr.io/nvidia/vllm:<タグ> nvidia-smi
+docker run --rm --gpus all nvcr.io/nvidia/vllm:26.10-py3 nvidia-smi
 
 # モデルの保存先（コンテナを消しても残る）
 mkdir -p ~/.cache/huggingface
@@ -139,7 +139,7 @@ mkdir -p ~/.cache/huggingface
 # -it を付けると、ファイルごとの進捗バーが表示される。途中で止まっても再実行すれば続きから再開する
 docker run --rm -it \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
-  nvcr.io/nvidia/vllm:<タグ> \
+  nvcr.io/nvidia/vllm:26.10-py3 \
   hf download Qwen/Qwen3-Coder-Next-FP8
 # hf コマンドがないと出た場合は huggingface-cli download に置き換える
 ```
@@ -162,13 +162,12 @@ watch -n 10 'du -sh ~/.cache/huggingface/hub/models--Qwen--Qwen3-Coder-Next-FP8'
 ```bash
 docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
-  nvcr.io/nvidia/vllm:<タグ> \
+  nvcr.io/nvidia/vllm:26.10-py3 \
   vllm serve Qwen/Qwen3-Coder-Next-FP8 \
     --served-model-name claude-opus-4-6 \
     --host 0.0.0.0 --port 8000 \
     --gpu-memory-utilization 0.8 \
     --max-model-len 262144 \
-    --max-num-seqs 2 \
     --kv-cache-dtype fp8 \
     --enable-auto-tool-choice --tool-call-parser qwen3_coder
 
@@ -201,7 +200,6 @@ Qwen3-Coder-Next FP8 は重みだけで約85GBあるため、`--gpu-memory-utili
 | --- | --- | --- | --- |
 | `--gpu-memory-utilization` | 0.9 | 0.8 | vLLM が予約するメモリの割合（0.8 で約100GB）。残り約25GBが OS の分 |
 | `--max-model-len` | 262144 | 262144 | Ollama の `OLLAMA_CONTEXT_LENGTH`・`.env` の `LLM_NUM_CTX` と同じ値にする |
-| `--max-num-seqs` | 256前後 | 2 | 同時処理数。指定しなくてもよい（アプリ側でサーバー全体の同時セッションを 10 までに抑える） |
 | `--kv-cache-dtype` | auto | fp8 | KV キャッシュをほぼ半減。256K を載せるために使う |
 | `--served-model-name` | モデルのリポジトリ名 | claude-opus-4-6 | API で指定するモデル名（別名）。`.env` の `LLM_MODEL` と揃える |
 | `--enable-auto-tool-choice` `--tool-call-parser` | 無効 | 有効・`qwen3_coder` | Claude Code などのツール呼び出しを解釈する |
@@ -213,7 +211,6 @@ vllm serve Qwen/Qwen3-Coder-Next-FP8 \
   --host 0.0.0.0 --port 11434 \
   --gpu-memory-utilization 0.8 \
   --max-model-len 262144 \
-  --max-num-seqs 2 \
   --kv-cache-dtype fp8 \
   --enable-auto-tool-choice --tool-call-parser qwen3_coder \
   2>&1 | tee ~/vllm.log
@@ -223,7 +220,7 @@ vllm serve Qwen/Qwen3-Coder-Next-FP8 \
 
 1. `--enforce-eager` を追加
 2. `--max-model-len` を 131072 に下げる
-3. `--max-num-seqs` を 1 に下げる（Web 画面の同時セッション数・`--concurrency` も 1 にする）
+3. 同時に処理するファイル数を 1 に下げる（Web 画面の同時セッション数・`--concurrency` を 1 にする）
 4. `--max-model-len` を 65536 に下げる
 
 ## 手順4: 起動確認と動作テスト
@@ -265,7 +262,7 @@ docker rm -f vllm
 docker run --rm -it \
   -e HF_TOKEN=hf_xxxxxxxx \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
-  nvcr.io/nvidia/vllm:<タグ> \
+  nvcr.io/nvidia/vllm:26.10-py3 \
   hf download Qwen/Qwen3-Coder-Next-FP8
 ```
 
@@ -292,7 +289,7 @@ curl http://localhost:11434/v1/messages   -H "Content-Type: application/json" -H
 watch -n 2 free -h
 ```
 
-- [ ] `/v1/chat/completions` と `/v1/messages` の両方で応答が返る（`/v1/messages` が 404 なら vLLM が古い。新しいタグを使う）
+- [ ] `/v1/chat/completions` と `/v1/messages` の両方で応答が返る（`/v1/messages` が 404 なら vLLM が古い。イメージが `26.10-py3` になっているか確かめる）
 - [ ] 推論中も `available` が 10GB 以上残っている（OS の余裕）
 - [ ] ログに `KV cache` の確保量と最大同時処理数が出ている（`grep -i "kv cache" ~/vllm.log`）。262144 トークンが収まっていること
 
@@ -309,13 +306,12 @@ Modelfile の直接の代わりになる。手順1.5・3 の起動コマンド�
 ```bash
 docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
-  nvcr.io/nvidia/vllm:<タグ> \
+  nvcr.io/nvidia/vllm:26.10-py3 \
   vllm serve Qwen/Qwen3-Coder-Next-FP8 \
     --served-model-name claude-opus-4-6 qwen3-coder-next \
     --host 0.0.0.0 --port 8000 \
     --gpu-memory-utilization 0.8 \
     --max-model-len 262144 \
-    --max-num-seqs 2 \
     --kv-cache-dtype fp8 \
     --enable-auto-tool-choice --tool-call-parser qwen3_coder
 ```
@@ -355,7 +351,7 @@ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
 ```
 
 - [ ] `/v1/models` に `claude-opus-4-6` が出る
-- [ ] `/v1/messages` が応答する（`404` なら vLLM が古く Anthropic 互換エンドポイントがない。新しいタグのコンテナにする）
+- [ ] `/v1/messages` が応答する（`404` なら vLLM が古く Anthropic 互換エンドポイントがない。イメージが `26.10-py3` になっているか確かめる）
 - [ ] `claude -p` が応答する
 
 ### Claude Code のシンキングを止める（必須）
@@ -488,7 +484,7 @@ sudo systemctl start godoc-nightly.timer
 | `max_model_len` が KV キャッシュに収まらないと出る | コンテキスト長が大きすぎる | `--max-model-len` をエラーが示す値以下にし、`.env` の `LLM_NUM_CTX` も揃える |
 | CUDA グラフ取得中に落ちる | グラフ用メモリ不足 | `--enforce-eager` を追加 |
 | 端末が固まる・OS が応答しない | OS の分まで使い切った | 再起動後、`--gpu-memory-utilization 0.75`・`--max-model-len 131072` で起動し直す |
-| 推論中に落ちる | 長い入力や同時リクエストで KV 不足 | `--max-num-seqs` と `--max-model-len` を下げる |
+| 推論中に落ちる | 長い入力や同時リクエストで KV 不足 | `--max-model-len` を下げ、同時セッション数（Web 画面・`--concurrency`）を減らす |
 | VS Code（Claude Code）から使うと、サーバー側で reasoning parser のエラーが出る | Claude Code がシンキングを指定してリクエストしている | 手順5の「Claude Code のシンキングを止める」で、Claude Code 側のシンキングをオフにする |
 | `--reasoning-parser` を付けると、シンキングは表示されるがレスポンスが表示されない | Qwen3-Coder-Next はシンキングの区切りを出さないため、応答全体がシンキング扱いになる | `--reasoning-parser` を外して起動し直し、Claude Code 側のシンキングをオフにする |
 | ツール呼び出しを含む長い入力で `!!!!` が延々と出る | ツール呼び出しの解釈の不具合（報告例あり） | `--tool-call-parser qwen3_xml` に変えて起動し直す |
@@ -536,13 +532,12 @@ free -h
 # 4. gpt-oss-120b で起動（モデルは初回起動時に自動でダウンロードされる）
 docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
-  nvcr.io/nvidia/vllm:<タグ> \
+  nvcr.io/nvidia/vllm:26.10-py3 \
   vllm serve openai/gpt-oss-120b \
     --served-model-name gpt-oss-120b \
     --host 0.0.0.0 --port 8000 \
     --gpu-memory-utilization 0.7 \
     --max-model-len 131072 \
-    --max-num-seqs 2 \
     --enable-auto-tool-choice --tool-call-parser openai
 
 docker logs -f vllm
@@ -617,9 +612,9 @@ docker ps -a --filter name=vllm         # 見出し行だけならよい
 # 2. コンテナが残っていれば削除
 docker rm -f vllm
 
-# 3. コンテナイメージを削除（タグは一覧で確認する）
+# 3. コンテナイメージを削除（26.10-py3 以外のタグも入れていれば、一覧で確かめて同じように消す）
 docker images nvcr.io/nvidia/vllm
-docker rmi nvcr.io/nvidia/vllm:<タグ>
+docker rmi nvcr.io/nvidia/vllm:26.10-py3
 
 # 4. モデル（約85GB）を削除。コンテナが root で書き込んだファイルなので sudo が要る
 sudo rm -rf ~/.cache/huggingface/hub/models--Qwen--Qwen3-Coder-Next-FP8
@@ -686,7 +681,7 @@ Conflicts=ollama.service
 [Service]
 User=<ユーザー名>
 ExecStartPre=+/bin/sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
-ExecStart=/path/to/venv/bin/vllm serve Qwen/Qwen3-Coder-Next-FP8 --served-model-name claude-opus-4-6 --host 0.0.0.0 --port 11434 --gpu-memory-utilization 0.8 --max-model-len 262144 --max-num-seqs 2 --kv-cache-dtype fp8 --enable-auto-tool-choice --tool-call-parser qwen3_coder
+ExecStart=/path/to/venv/bin/vllm serve Qwen/Qwen3-Coder-Next-FP8 --served-model-name claude-opus-4-6 --host 0.0.0.0 --port 11434 --gpu-memory-utilization 0.8 --max-model-len 262144 --kv-cache-dtype fp8 --enable-auto-tool-choice --tool-call-parser qwen3_coder
 Restart=on-failure
 
 [Install]

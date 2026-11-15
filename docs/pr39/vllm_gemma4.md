@@ -242,9 +242,8 @@ watch -n 2 free -h
 
 ```bash
 # /opt/Batch_Exec/.env
-LLM_MODEL=claude-opus-4-6     # 変えない（--served-model-name の先頭と同じ）
+LLM_MODEL=claude-opus-4-6       # 変えない（--served-model-name の先頭と同じ）
 LLM_NUM_CTX=131072              # 262144 から変更（--max-model-len と同じ）
-LLM_CONCURRENCY=2               # 変えない（同時に処理するファイル数はアプリ側で制御する）
 ```
 
 ```bash
