@@ -58,7 +58,6 @@ generate の中身（ファイルごと）:
 処理対象の言語・フォルダ・ファイル・除外を変える手順は [docs/other/target_files.md](docs/other/target_files.md) にまとめている。
 処理が遅いときの切り分け（原因の候補・計測ログの集計方法・関係する設定）は [docs/other/performance_troubleshooting.md](docs/other/performance_troubleshooting.md) にまとめている。
 対象フォルダをネットワーク上の NAS にする手順（マウント・サービスの設定・git pull・元に戻す方法）は [docs/other/nas_target.md](docs/other/nas_target.md) にまとめている。
-GB10 の GUI テキストエディタだけ日本語を入力できないときの切り分けと対処（fcitx5 / IBus の GTK4 対応・Snap 版エディタ・gedit への切り替え）は [docs/other/japanese_input.md](docs/other/japanese_input.md) にまとめている。
 サーバーの更新手順書は、作成日（PR のマージ日）ごとに `docs/pr<最初のPR番号>-<最後のPR番号>/` にまとめている（その日のPRが1件なら `docs/pr<番号>/`）。それ以外の仕様・使い方の文書は `docs/other/` に置く。
 以前の版（Go 専用）からサーバーを入れ替える手順は [docs/pr18-22/migration_multi_language.md](docs/pr18-22/migration_multi_language.md) にまとめている。
 チェックポイント廃止・再生成の見直し版（PR #21）への入れ替え手順は [docs/pr18-22/migration_drop_checkpointer.md](docs/pr18-22/migration_drop_checkpointer.md) にまとめている。
@@ -67,6 +66,7 @@ Ollama を止めて vLLM に切り替える手順（アカウント登録の要�
 vLLM に切り替えた後、アプリ（Web 画面・夜間バッチ）を vLLM 対応版に入れ替える設置手順（`.env`・systemd のユニットの入れ直し・元に戻す方法）は [docs/pr33-38/migration_vllm_app.md](docs/pr33-38/migration_vllm_app.md) にまとめている。
 vLLM のモデルを Qwen3-Coder-Next から Gemma 4 31B に切り替える手順（事前ダウンロード・Hugging Face にログインできない場合の入手先・元に戻す方法）は [docs/pr39/vllm_gemma4.md](docs/pr39/vllm_gemma4.md) にまとめている。
 既存サーバーの設置フォルダを `/opt/Lang_Chain` から `/opt/Batch_Exec` に移す手順（仮想環境の作り直し・`.env`・systemd の入れ直し・元に戻す方法）は [docs/pr40-42/migration_rename_batch_exec.md](docs/pr40-42/migration_rename_batch_exec.md) にまとめている。
+GB10 の GUI テキストエディタだけ日本語を入力できないときの切り分けと対処（fcitx5 / IBus の GTK4 対応・Snap 版エディタ・gedit への切り替え）は [docs/pr46-47/japanese_input.md](docs/pr46-47/japanese_input.md) にまとめている。
 
 ## サーバー(GB10)へのセットアップ
 
