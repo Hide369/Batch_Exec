@@ -179,7 +179,7 @@ diff -ru /srv/repos/myapp/user_api/pkg/handler /opt/Batch_Exec/out/_commented/us
 | 表示 | 意味 | 対処 |
 |---|---|---|
 | `too_large` | ファイルが大きく、全文を1回の応答で返せない | `.env` の `LLM_NUM_PREDICT` を上げる（例：`16384`）。上限の目安は `LLM_NUM_PREDICT × 1.5` 文字 |
-| `failed_validation` | 再生成しても、コメント以外のコードを変えてしまった | 同じコマンドで再実行する（失敗したファイルだけが処理される）。セッションログの「検証NG」に、元の行と出力の行・変わった字句が出るので、繰り返す場合はそれを見てスキルにその変更をしないよう明記する |
+| `needs_review` | 再生成しても、コメント以外のコードを変えてしまった。失敗にはせず、出力は残してある（要確認） | 出力フォルダ（`_commented/` など）の `要確認.md` に、ファイルと理由（元の行・出力の行・変わった字句）が出る。差分を見て取り込むか判断する。差分スキップには記録しないので、再実行するとそのファイルだけもう一度生成し、通れば一覧から外れる。繰り返す場合はスキルにその変更をしないよう明記する |
 | `error` | Claude Code の異常終了、UTF-8 で読めないソース、出力ファイルの保存失敗など（例：`error_max_turns`） | `error` 欄を確認する。ターン数不足なら `.env` の `CLAUDE_MAX_TURNS` を上げる |
 
 **手順6. 完了**
@@ -395,7 +395,7 @@ tmux / nohup で起動していれば、**起動後は端末を閉じて GB10 �
 - `llm_calls[].input_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens`：Claude Code 1回の実行ごとの入力トークン数（`usage` の値そのまま）。返らない項目は `null`
 - `llm_calls[].total_input_tokens`：上の3つのうち値のあるものの合計（プロンプトキャッシュ分は `input_tokens` に含まれないため）。すべて `null` なら `null`
 - `warnings`：合否に影響しない注意。`total_input_tokens` が `LLM_NUM_CTX × LLM_CTX_WARN_RATIO`（既定 0.9）を超えた実行があると残る。`done` でも残り、進行表示にも `[警告: ...]` として出る
-- `status`：`done` / `failed_validation` / `too_large` / `error`（`error` の詳細は `error` 欄。例：`error_max_turns`）
+- `status`：`done` / `needs_review`（コメント追記で検証に通らないまま出力を残した。`warnings` に理由）/ `failed_validation`（設計書で検証に通らなかった）/ `too_large` / `error`（`error` の詳細は `error` 欄。例：`error_max_turns`）
 
 サマリーには、入力トークン数（1回あたり）の最大値・平均値と、警告が出た件数も表示される（値が取れた実行だけで集計し、1回も取れなければ表示しない）。
 

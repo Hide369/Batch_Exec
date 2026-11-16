@@ -319,7 +319,8 @@ async def test_runs_doc_and_comment_tasks_in_one_batch(env, comment_skill, monke
     assert await run_batch(repo, out, "--run-id", "r2") == 0
 
 
-async def test_comment_that_changes_code_is_not_written(env, comment_skill, monkeypatch, repo, tmp_path):
+async def test_comment_that_changes_code_is_kept_for_review(env, comment_skill, monkeypatch, repo, tmp_path):
+    # 再生成しても検証に通らなければ、失敗にせず出力を残して「要確認」にする（処理は止めない）
     monkeypatch.setenv("DOC_MAX_ATTEMPTS", "1")
     out = tmp_path / "out"
     broken = with_comment(repo, HEALTH).replace("func Health()", "func Healthz()")
@@ -328,13 +329,23 @@ async def test_comment_that_changes_code_is_not_written(env, comment_skill, monk
         reply(good_doc("GetUser")), reply(with_comment(repo, USER)),
     ]))
 
-    assert await run_batch(repo, out) == 1
+    assert await run_batch(repo, out) == 0
 
-    assert not (out / "_commented" / HEALTH).exists()
+    assert (out / "_commented" / HEALTH).read_text(encoding="utf-8") == broken.strip() + "\n"
     assert (out / HEALTH_DOC).is_file()  # 同じファイルの設計書は影響を受けない
     logs = [json.loads(line) for line in (out / "_runs" / "r1.jsonl").read_text(encoding="utf-8").splitlines()]
-    failed = [log for log in logs if log["status"] != "done"]
-    assert [(log["task"], log["rel_path"], log["status"]) for log in failed] == [("comment", HEALTH, "failed_validation")]
+    review = [log for log in logs if log["status"] != "done"]
+    assert [(log["task"], log["rel_path"], log["status"]) for log in review] == [("comment", HEALTH, "needs_review")]
+    assert "差分を確認" in review[0]["warnings"][0]
+    review_md = (out / "_commented" / "要確認.md").read_text(encoding="utf-8")
+    assert f"## {HEALTH}" in review_md and "Healthz" in review_md
+    assert USER not in review_md
+    # 差分スキップには記録しないので、次の実行でもう一度生成し、通れば一覧から外れる
+    assert HEALTH not in json.loads((out / "_commented" / ".manifest.json").read_text(encoding="utf-8"))
+    use_llm(monkeypatch, ScriptedLLM([reply(with_comment(repo, HEALTH))]))
+    assert await run_batch(repo, out, "--tasks", "comment", "--run-id", "r2") == 0
+    assert (out / "_commented" / HEALTH).read_text(encoding="utf-8") == with_comment(repo, HEALTH).strip() + "\n"
+    assert not (out / "_commented" / "要確認.md").exists()
 
 
 async def test_tasks_option_runs_only_selected_task(env, comment_skill, monkeypatch, repo, tmp_path):
@@ -432,12 +443,14 @@ async def test_runs_registered_custom_skills(env, custom_skills, monkeypatch, re
     assert "スキルに従って文書を作成してください" in first[-1].content
 
 
-async def test_custom_comment_skill_rejects_code_changes(env, custom_skills, monkeypatch, repo, tmp_path):
+async def test_custom_comment_skill_keeps_code_changes_for_review(env, custom_skills, monkeypatch, repo, tmp_path):
     out = tmp_path / "out"
     changed = "package handler\n\nfunc Health() { _ = 1 }\n"
     use_llm(monkeypatch, ScriptedLLM([reply(changed)] * 3))
-    assert await run_batch(repo, out, "--tasks", "jp-comment", "--limit", "1") == 1
-    assert not (out / "_jp-comment" / HEALTH).exists()
+    assert await run_batch(repo, out, "--tasks", "jp-comment", "--limit", "1") == 0
+    # 検証に通らなかった出力は要確認として残す
+    assert (out / "_jp-comment" / HEALTH).read_text(encoding="utf-8") == changed
+    assert HEALTH in (out / "_jp-comment" / "要確認.md").read_text(encoding="utf-8")
 
 
 async def test_custom_skill_without_skill_file_is_reported(env, custom_skills, repo, tmp_path):

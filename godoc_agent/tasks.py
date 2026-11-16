@@ -47,6 +47,9 @@ class Task:
     out_prefix: str = ""
     # 出力がソースファイルの全文か（コメント追記・書き換え）。前置きや <source> の囲みを外すかどうかに使う
     outputs_source: bool = False
+    # 検証に通らないまま再生成の上限に達しても、出力を残して「要確認」にするか（失敗にせず処理を進める）。
+    # コメント追記は検証がコードの保護だけなので、人が差分を見て判断できるよう残す
+    keep_unverified_output: bool = False
 
     def output_path(self, out_dir: Path, rel_path: str) -> Path:
         source = PurePosixPath(rel_path)
@@ -195,4 +198,5 @@ def comment_task(
         # 元のリポジトリのソースは変わらないため、毎回元のソースから追記させる
         uses_previous_output=False,
         outputs_source=True,
+        keep_unverified_output=True,
     )

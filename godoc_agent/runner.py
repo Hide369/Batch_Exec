@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 
 from .claude_code import build_claude_code
 from .config import APP_DIR, DEFAULT_CONCURRENCY, MAX_CONCURRENCY, Settings, load_settings
-from .doc_graph import SKIPPED_STATUSES, build_doc_graph
+from .doc_graph import NEEDS_REVIEW, SKIPPED_STATUSES, build_doc_graph
 from .source_common import sha256_text
 from .preflight import preflight
 from .prompts import load_skill
@@ -78,6 +78,53 @@ class Manifest:
         tmp.replace(self.path)
 
 
+REVIEW_LIST_NAME = "要確認.md"
+
+
+class ReviewList:
+    """検証に通らないまま出力を残したファイル（要確認）の一覧。
+
+    出力フォルダの 要確認.md に、ファイルと理由を書く（生成物の一覧・ZIP に含まれる）。
+    次の実行で検証に通れば一覧から外し、すべて外れたらファイルごと消す。元データは隣の .review.json。
+    """
+
+    def __init__(self, folder: Path):
+        self.folder = folder
+        self.data_path = folder / ".review.json"
+        self.entries: dict[str, list[str]] = (
+            json.loads(self.data_path.read_text(encoding="utf-8")) if self.data_path.is_file() else {}
+        )
+
+    def add(self, rel_path: str, issues: list[str]) -> None:
+        self.entries[rel_path] = issues
+        self._write()
+
+    def remove(self, rel_path: str) -> None:
+        if self.entries.pop(rel_path, None) is not None:
+            self._write()
+
+    def _write(self) -> None:
+        md = self.folder / REVIEW_LIST_NAME
+        if not self.entries:
+            self.data_path.unlink(missing_ok=True)
+            md.unlink(missing_ok=True)
+            return
+        self.folder.mkdir(parents=True, exist_ok=True)
+        tmp = self.data_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.entries, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        tmp.replace(self.data_path)
+        lines = [
+            "# 要確認のファイル", "",
+            "再生成しても検証に通らなかったため、そのまま出力したファイルです。元のソースとの差分を確認してから取り込んでください。",
+            "次の実行で検証に通れば、この一覧から外れます。", "",
+        ]
+        for rel_path in sorted(self.entries):
+            lines.append(f"## {rel_path}")
+            lines += [f"- {issue}" for issue in self.entries[rel_path]]
+            lines.append("")
+        md.write_text("\n".join(lines), encoding="utf-8")
+
+
 @dataclass
 class TaskRun:
     """1つのタスクを実行するための部品一式（タスク定義・コンパイル済みグラフ・差分記録）。"""
@@ -85,6 +132,7 @@ class TaskRun:
     task: Task
     graph: object
     manifest: Manifest
+    review: ReviewList | None = None  # 要確認の一覧（Task.keep_unverified_output のタスクだけ）
 
 
 async def process_file(
@@ -150,12 +198,21 @@ def migrate_legacy_output(task: Task, out_dir: Path, rel_path: str) -> None:
 
 
 def save_output(task_run: TaskRun, out_dir: Path, result: FileResult) -> None:
-    """生成物を保存し、差分スキップに記録する。保存できなければ、この1件だけを失敗にする。"""
+    """生成物を保存し、差分スキップに記録する。保存できなければ、この1件だけを失敗にする。
+
+    要確認（検証に通らないまま残す出力）は差分スキップに記録せず、次の実行でもう一度生成する。
+    """
     out_path = task_run.task.output_path(out_dir, result.rel_path)
     try:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(result.draft + "\n", encoding="utf-8")
-        task_run.manifest.record(result.rel_path, result.source_hash)
+        if result.status == NEEDS_REVIEW:
+            if task_run.review is not None:
+                task_run.review.add(result.rel_path, result.issues or [])
+        else:
+            task_run.manifest.record(result.rel_path, result.source_hash)
+            if task_run.review is not None:
+                task_run.review.remove(result.rel_path)
     except OSError as e:
         result.status = "error"
         result.error = f"出力ファイルを保存できません: {type(e).__name__}: {e}"
@@ -186,9 +243,17 @@ def skip_warnings(result: FileResult) -> list[str]:
     return [f"入力がコンテキストの上限を超えるため、このファイルはスキップしました（{reason}）"]
 
 
+def review_warnings(result: FileResult) -> list[str]:
+    """検証に通らないまま出力を残したファイルの警告。失敗にはせず、人の確認に回したことを残す。"""
+    if result.status != NEEDS_REVIEW:
+        return []
+    reason = "; ".join(result.issues or [])
+    return [f"検証に通らないまま出力しました。元のソースとの差分を確認してください（{reason}）"[:600]]
+
+
 def is_ok(result: FileResult) -> bool:
-    """バッチの成否に数えないもの（成功・警告付きのスキップ）。"""
-    return result.status == "done" or result.status in SKIPPED_STATUSES
+    """バッチの成否に数えないもの（成功・警告付きのスキップ・要確認として出力を残したもの）。"""
+    return result.status in ("done", NEEDS_REVIEW) or result.status in SKIPPED_STATUSES
 
 
 def summarize(results: list[FileResult], wall_s: float) -> str:
@@ -196,7 +261,8 @@ def summarize(results: list[FileResult], wall_s: float) -> str:
     turns = [c["num_turns"] for c in calls if c.get("num_turns")]
     # usage を返さない実行（不明）は除いて集計する
     input_tokens = [c["total_input_tokens"] for c in calls if c.get("total_input_tokens") is not None]
-    warned = [r for r in results if r.warnings and r.status not in SKIPPED_STATUSES]
+    warned = [r for r in results if r.warnings and r.status not in SKIPPED_STATUSES and r.status != NEEDS_REVIEW]
+    review = [r for r in results if r.status == NEEDS_REVIEW]
     skipped = [r for r in results if r.status in SKIPPED_STATUSES]
     done = [r for r in results if r.status == "done"]
     failed = [r for r in results if not is_ok(r)]
@@ -216,6 +282,9 @@ def summarize(results: list[FileResult], wall_s: float) -> str:
         lines.append(f"コンテキスト上限に近い実行があった件数: {len(warned)} 件（計測ログの warnings を参照）")
     if skipped:
         lines.append(f"警告: 入力がコンテキストの上限を超えるためスキップした件数: {len(skipped)} 件（計測ログの warnings を参照）")
+    if review:
+        lines.append(f"要確認: 検証に通らないまま出力した件数: {len(review)} 件（出力フォルダの {REVIEW_LIST_NAME} を参照）")
+        lines += [f"  - {r.task} {r.rel_path}" for r in review]
     if done:
         lines.append(f"成功1件あたり平均: {sum(r.duration_s for r in done) / len(done):.0f} 秒")
     if results:
@@ -331,6 +400,7 @@ async def _run_batch(args: argparse.Namespace, settings: Settings, repo: Path, o
             task,
             build_doc_graph(llms[task.name], task, max_attempts=settings.max_attempts).compile(),
             manifests[task.name],
+            ReviewList(task.manifest_path(out_dir).parent) if task.keep_unverified_output else None,
         )
         for task, _ in tasks
     }
@@ -354,8 +424,8 @@ async def _run_batch(args: argparse.Namespace, settings: Settings, repo: Path, o
         i = 0
         async for result in finished_results():
             i += 1
-            result.warnings = skip_warnings(result) + context_warnings(result.llm_calls, settings)
-            if result.status == "done" and result.draft:
+            result.warnings = skip_warnings(result) + review_warnings(result) + context_warnings(result.llm_calls, settings)
+            if result.status in ("done", NEEDS_REVIEW) and result.draft:
                 save_output(runs[result.task], out_dir, result)
             results.append(result)
             metrics_file.write(json.dumps(result.to_log(), ensure_ascii=False) + "\n")
