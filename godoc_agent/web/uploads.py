@@ -1,8 +1,11 @@
 """クライアント PC のフォルダ（ソース一式）をサーバーにアップロードして、対象フォルダとして使う。
 
 runner と Claude Code はサーバーの中でしか動かないため、クライアント PC のファイルはいったんサーバーに置く。
-  <state>/uploads/<利用者ID>/<フォルダ名>/src … アップロードしたソース（対象フォルダ）
-  <state>/uploads/<利用者ID>/<フォルダ名>/out … 出力先
+  <state>/uploads/<利用者ID>/<フォルダ名>/src/<フォルダ名> … アップロードしたソース（対象フォルダ）
+  <state>/uploads/<利用者ID>/<フォルダ名>/out               … 出力先
+対象フォルダの名前は、選んだフォルダの名前のままにする。targets.toml の include は --repo のフォルダ名を付けた
+パスとも照合するため（xx_api 自体を選んだときに **/?*_api/pkg/handler/** で見つけられるように）、
+src のような別の名前にすると対象が0件になる。
 同じフォルダ名でアップロードし直すと src だけを入れ替え、out は残す（変更のないファイルは差分スキップで再利用される）。
 
 大きなフォルダでもリクエスト1回の大きさとメモリを抑えられるよう、ブラウザは数MBずつに分けて送る。
@@ -84,7 +87,7 @@ class UploadStore:
             for f in files:
                 if len(f.content) > MAX_UPLOAD_FILE_BYTES:
                     raise ValueError(f"{f.path} が1ファイルの上限（{MAX_UPLOAD_FILE_BYTES // 1024 // 1024}MB）を超えています")
-                path = pending.staging / _check_rel_path(f.path)
+                path = pending.staging / pending.name / _check_rel_path(f.path)
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(f.content)
             pending.files += len(files)
@@ -108,7 +111,7 @@ class UploadStore:
             out.mkdir(exist_ok=True)
             del self._pending[upload_id]
         shutil.rmtree(old, ignore_errors=True)
-        return src, out
+        return src / pending.name, out
 
     def abort(self, client_id: str, upload_id: str) -> None:
         with self._lock:

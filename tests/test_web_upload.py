@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from godoc_agent.runlock import run_lock
+from godoc_agent.targets import discover_source_files, load_targets
 from godoc_agent.web import uploads as uploads_module
 from test_web import (  # noqa: F401  フィクスチャを読み込む
     CSRF, admin, app_dir, client, jobs, login, make_app, make_client, out_dir, password_hash, repo_dir, root,
@@ -45,7 +46,8 @@ def test_uploaded_folder_becomes_target_and_can_be_run(make_app, jobs):
     res = upload(alice, "my_app", SOURCES)
     assert res.status_code == 200
     repo, out = Path(res.json()["repo"]), Path(res.json()["out"])
-    assert (repo.name, out.name, repo.parent.name) == ("src", "out", "my_app")
+    # 対象フォルダは選んだフォルダの名前のまま（src/my_app）、出力先はその隣の out
+    assert (repo.name, repo.parent.name, out.name, out.parent.name) == ("my_app", "src", "out", "my_app")
     assert (repo / "pkg/handler/user.go").read_bytes() == b"package handler\n"
     assert (repo / "README.md").read_text(encoding="utf-8") == "日本語"
     assert alice.get("/api/config").json()["workspace"] == {"repo": str(repo), "out": str(out)}
@@ -55,6 +57,18 @@ def test_uploaded_folder_becomes_target_and_can_be_run(make_app, jobs):
     wait_finished(jobs)
     log = alice.get(f"/api/runs/{run.json()['run_id']}/log").json()["text"]
     assert f"--repo {repo}" in log and f"--out {out}" in log
+
+
+def test_uploaded_api_folder_itself_is_found_by_folder_name_patterns(make_app):
+    # xx_api フォルダそのものを選んだとき、include の **/?*_api/pkg/handler/** で対象が見つかる
+    # （以前は対象フォルダが src という名前になり、フォルダ名で照合できず対象が0件になっていた）
+    alice = browser(make_app)
+    res = upload(alice, "user_api", SOURCES)
+    assert res.status_code == 200
+    repo = Path(res.json()["repo"])
+    config = load_targets(Path(__file__).resolve().parent.parent / "targets.example.toml")
+    found = sorted(f.path.relative_to(repo).as_posix() for f in discover_source_files(repo, config))
+    assert found == ["pkg/handler/health.go", "pkg/handler/user.go"]
 
 
 def test_reupload_replaces_sources_but_keeps_outputs(make_app):
@@ -69,7 +83,8 @@ def test_reupload_replaces_sources_but_keeps_outputs(make_app):
     assert not (repo / "pkg/handler/health.go").exists()  # 前回のファイルは残らない
     assert (Path(second["out"]) / "詳細設計書_user.md").is_file()  # 生成物は残す（差分スキップに使う）
     # 途中のファイルは片付いている
-    assert sorted(p.name for p in repo.parent.iterdir()) == ["out", "src"]
+    assert sorted(p.name for p in repo.parent.parent.iterdir()) == ["out", "src"]
+    assert [p.name for p in repo.parent.iterdir()] == ["my_app"]
 
 
 def test_uploads_are_separated_per_browser_and_not_shared_as_default(make_app):

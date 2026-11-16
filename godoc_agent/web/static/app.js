@@ -16,6 +16,7 @@ const state = {
   logRunId: null,   // ログ欄に表示中の run_id
   logOffset: 0,
   sessionSlot: null, // セッションログを表示中の枠の番号（null は非表示）
+  server: null, // サーバー全体のセッションの使用状況（/api/status の server）
   following: true,  // 実行中のジョブのログを追いかけるか（履歴を選ぶと止める）
   outputs: [],
   targets: null,    // サーバーから読んだ対象の設定
@@ -316,12 +317,37 @@ async function loadConfig() {
   renderConcurrency(config.concurrency);
 }
 
-function renderConcurrency({ default: fallback, max }) {
+// 画面で選ぶ同時セッション数の初期値。全枠（既定値）ではなく1から始め、必要な分だけ増やしてもらう
+const INITIAL_CONCURRENCY = 1;
+
+function renderConcurrency({ max }) {
   const input = $("concurrency");
   input.max = String(max);
-  // 入力中の値は残し、未入力のときだけ既定値を入れる
-  if (input.value === "" && fallback != null) input.value = String(fallback);
+  // 入力中の値は残し、未入力のときだけ初期値を入れる
+  if (input.value === "") input.value = String(INITIAL_CONCURRENCY);
 }
+
+// サーバー全体の Claude Code セッションの起動数と空き（同時セッションの入力欄の横に出す）
+function renderServerSessions(server) {
+  const box = $("server-sessions");
+  if (!server) {
+    box.replaceChildren();
+    return;
+  }
+  const free = Math.max(server.max_sessions - server.active_sessions, 0);
+  const wanted = Number($("concurrency").value) || 0;
+  box.replaceChildren(
+    badge(`起動中 ${server.active_sessions}`, server.active_sessions > 0 ? "running" : "idle"),
+    " ",
+    badge(`空き ${free} / ${server.max_sessions}`, free === 0 ? "fail" : wanted > free ? "warn" : "ok"),
+  );
+  box.title = wanted > free
+    ? `空きは ${free} セッションです。${wanted} を指定すると、足りない分は空くまで待ちます`
+    : "サーバー全体（他の人の実行・コマンドからの実行を含む）で動いている Claude Code のセッション数";
+}
+
+// 入力を変えたら、空きとの比較（足りなければ黄色）をすぐ反映する
+$("concurrency").addEventListener("input", () => renderServerSessions(state.server));
 
 $("run-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -425,6 +451,8 @@ async function refreshStatus() {
     : "";
   $("status-detail").style.whiteSpace = "pre-wrap";
   renderServerLoad(others, server);
+  renderServerSessions(server);
+  state.server = server;
 
   state.running = running;
   state.anyRunning = running || others.length > 0;
@@ -440,7 +468,10 @@ async function refreshStatus() {
 // 他の人の実行（別の出力先）と、サーバー全体の Claude Code のセッションの使用状況
 function renderServerLoad(others, server) {
   const lines = [];
-  if (server) lines.push(`サーバー全体の Claude Code セッション: 使用中 ${server.active_sessions} / ${server.max_sessions}`);
+  if (server) {
+    const free = Math.max(server.max_sessions - server.active_sessions, 0);
+    lines.push(`サーバー全体の Claude Code セッション: 起動中 ${server.active_sessions} / 空き ${free}（上限 ${server.max_sessions}）`);
+  }
   for (const other of others) {
     lines.push(`他の実行: ${other.trigger === "scheduled" ? "定期実行" : "手動"} / run_id=${other.run_id}`
       + ` / 開始 ${fmtTime(other.started_at)} / 出力 ${other.out}`);
