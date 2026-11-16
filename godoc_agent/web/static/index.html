@@ -200,7 +200,8 @@
       </div>
       <div class="row">
         <span class="label">同時セッション</span>
-        <input id="concurrency" type="number" min="1" max="10" step="1" data-admin>
+        <input id="concurrency" type="number" min="1" max="10" step="1" value="1" data-admin>
+        <span id="server-sessions" class="small"></span>
         <span id="concurrency-note" class="muted small">1〜10。この実行で同時に動かす Claude Code の数。サーバー全体（他の人の実行との合計）でも10までで、空きがなければ空くまで待ちます</span>
       </div>
       <div class="row">
