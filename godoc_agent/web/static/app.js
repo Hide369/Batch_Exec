@@ -17,6 +17,7 @@ const state = {
   logOffset: 0,
   sessionSlot: null, // セッションログを表示中の枠の番号（null は非表示）
   server: null, // サーバー全体のセッションの使用状況（/api/status の server）
+  skillsInUse: [], // 実行中の処理が使っているスキル名（入れ替え・削除はできない）
   following: true,  // 実行中のジョブのログを追いかけるか（履歴を選ぶと止める）
   outputs: [],
   targets: null,    // サーバーから読んだ対象の設定
@@ -81,9 +82,15 @@ function lines(text) {
 // 管理者だけが使える操作（data-admin）と、実行中は変えられない設定の入力欄をまとめて切り替える
 function applyPermissions() {
   for (const node of document.querySelectorAll("[data-admin]")) {
-    // スキル・対象の設定は全員で共有するため、誰かの実行中は変えられない（フォルダはブラウザごとなので、いつでも選べる）
-    const lockedWhileAnyRunning = node.closest("#tab-targets, #tab-skills");
-    node.disabled = !state.admin || Boolean(lockedWhileAnyRunning && state.anyRunning);
+    // 対象の設定は全員で共有するため、誰かの実行中は変えられない（フォルダはブラウザごとなので、いつでも選べる）
+    const lockedWhileAnyRunning = node.closest("#tab-targets");
+    // スキルは実行中でも追加・変更できる。ただし実行中の処理が使っているスキルの入れ替え・削除だけは止める
+    const skill = "lockInUse" in node.dataset ? node.closest("[data-skill]")?.dataset.skill : null;
+    const inUse = skill != null && state.skillsInUse.includes(skill);
+    node.disabled = !state.admin || Boolean(lockedWhileAnyRunning && state.anyRunning) || inUse;
+  }
+  for (const note of document.querySelectorAll("[data-skill] .skill-in-use")) {
+    note.classList.toggle("hidden", !state.skillsInUse.includes(note.closest("[data-skill]").dataset.skill));
   }
   for (const node of document.querySelectorAll(".admin-note")) node.classList.toggle("hidden", state.admin);
   document.querySelector('[data-tab="skills"]').classList.toggle("hidden", !state.admin);
@@ -432,7 +439,7 @@ function badge(text, cls) {
 }
 
 async function refreshStatus() {
-  const { job, busy_elsewhere: busyElsewhere, others = [], server } = await api("/api/status");
+  const { job, busy_elsewhere: busyElsewhere, others = [], server, skills_in_use: skillsInUse = [] } = await api("/api/status");
   const running = job?.running ?? false;
   let status;
   if (running) status = badge(job.stop_requested ? "停止中…" : "実行中", "running");
@@ -456,6 +463,7 @@ async function refreshStatus() {
 
   state.running = running;
   state.anyRunning = running || others.length > 0;
+  state.skillsInUse = skillsInUse;
   state.jobRunId = job?.run_id ?? null;
   applyPermissions();
   $("start").disabled = !state.admin || running || busyElsewhere;
@@ -825,18 +833,24 @@ function renderSkill(info, types) {
   const { folderInput, fileInput } = filePickers((files, fromFolder) =>
     act(() => uploadSkill(info.name, files, fromFolder), "登録しました"));
 
+  // 実行中の処理が使っているあいだは押せないボタン（入れ替え・戻す・登録を外す）
+  const lockedButton = (...args) => {
+    const b = adminButton(...args);
+    b.dataset.lockInUse = "";
+    return b;
+  };
   const buttons = [
-    adminButton("フォルダを選んで登録", () => folderInput.click(), "primary"),
-    adminButton("SKILL.md だけ登録", () => fileInput.click()),
+    lockedButton("フォルダを選んで登録", () => folderInput.click(), "primary"),
+    lockedButton("SKILL.md だけ登録", () => fileInput.click()),
   ];
   if (info.registered) buttons.push(adminButton("内容を見る", () => viewSkill(info.name, info.label)));
   if (info.has_backup) {
-    buttons.push(adminButton("直前に戻す", () => confirm("直前に登録されていたスキルに戻しますか？")
+    buttons.push(lockedButton("直前に戻す", () => confirm("直前に登録されていたスキルに戻しますか？")
       && act(() => send("POST", `/api/skills/${encodeURIComponent(info.name)}/restore`), "直前のスキルに戻しました")));
   }
   if (info.name !== "doc" && info.registered) {
     const note = info.builtin ? "（コメント追記は実行されなくなります）" : "（「スキル」の一覧からも消えます。フォルダは .prev に残ります）";
-    buttons.push(adminButton("登録を外す", () => confirm(`「${info.label}」の登録を外しますか？${note}`)
+    buttons.push(lockedButton("登録を外す", () => confirm(`「${info.label}」の登録を外しますか？${note}`)
       && act(() => send("DELETE", `/api/skills/${encodeURIComponent(info.name)}`), "登録を外しました"), "danger"));
   }
 
@@ -859,6 +873,7 @@ function renderSkill(info, types) {
   section.append(...[
     el("h2", {}, info.label, el("span", { className: "muted small mono", textContent: `  ${info.name}` })),
     el("div", { className: "row" }, status, el("span", { className: "badge idle", textContent: info.type_label }),
+      el("span", { className: "badge warn skill-in-use hidden", textContent: "実行中の処理で使用中（終わるまで入れ替え・削除できません）" }),
       info.updated_at ? el("span", { className: "muted small", textContent: `更新 ${fmtTime(info.updated_at)}` }) : null),
     el("div", { className: "muted small mono", textContent: `スキル: ${info.dir}` }),
     el("div", { className: "muted small mono", textContent: `出力: ${outDir}`, style: "margin-bottom:8px" }),

@@ -319,8 +319,26 @@ def test_shared_settings_cannot_change_while_running(admin, jobs, repo_dir, root
     # フォルダはブラウザごとなので選び直せる。実行は起動したときの出力先のまま続く
     assert set_workspace(admin, repo_dir, root / "other_out").status_code == 200
     assert jobs.get(run_id).out_dir == (root / "out").resolve()
-    assert admin.put("/api/skills/comment", json={"files": [{"path": "SKILL.md", "content_b64": b64("x")}]}, headers=CSRF).status_code == 409
     assert admin.put("/api/targets", json={"config": {}}, headers=CSRF).status_code == 409
+
+
+def test_skills_can_change_while_running_unless_in_use(admin, monkeypatch):
+    monkeypatch.setenv("FAKE_RUNNER_SLEEP", "30")
+    skill = {"files": [{"path": "SKILL.md", "content_b64": b64("# skill")}]}
+    assert start_run(admin, tasks=["doc"]).status_code == 202
+    assert admin.get("/api/status").json()["skills_in_use"] == ["doc"]
+    # 実行中の処理が使っていないスキルは、登録・追加・削除できる
+    assert admin.put("/api/skills/comment", json=skill, headers=CSRF).status_code == 200
+    res = admin.put("/api/skills/test-spec", json={**skill, "type": "document", "label": "テスト仕様書"}, headers=CSRF)
+    assert res.status_code == 200, res.text
+    assert admin.put("/api/skills/test-spec/label", json={"label": "仕様書"}, headers=CSRF).status_code == 200
+    assert admin.delete("/api/skills/test-spec", headers=CSRF).status_code == 200
+    # 実行中の処理が使っているスキルは、入れ替え・戻す・登録を外すができない
+    res = admin.put("/api/skills/doc", json=skill, headers=CSRF)
+    assert res.status_code == 409
+    assert "実行中の処理で使われている" in res.json()["detail"]
+    assert admin.post("/api/skills/doc/restore", headers=CSRF).status_code == 409
+    assert admin.delete("/api/skills/doc", headers=CSRF).status_code == 409
 
 
 def test_stop_terminates_running_job(admin, jobs, monkeypatch):

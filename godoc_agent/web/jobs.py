@@ -23,6 +23,7 @@ from pathlib import Path
 
 from ..config import MAX_CONCURRENCY
 from ..runlock import LOCK_FILE_NAME, is_locked
+from ..skill_registry import COMMENT, DOC
 from ..sessions import sessions_path
 from ..slots import GlobalSlots
 from .settings import APP_DIR
@@ -122,6 +123,15 @@ class JobManager:
     def get(self, run_id: str) -> Job | None:
         return self._jobs.get(run_id)
 
+    def skills_in_use(self) -> set[str]:
+        """Web から起動して動いている実行が使っているスキル名。
+
+        runner は SKILL.md を起動時に読むが、参照ファイルは Claude Code が実行中に読むため、
+        使っているスキルを入れ替えると途中から結果が変わる。使っていないスキルは実行中でも変えてよい。
+        """
+        # タスクを指定しない実行（runner の既定）は、設計書とコメント追記を使うものとみなす
+        return {name for job in self.running_jobs() for name in (job.tasks or [DOC, COMMENT])}
+
     def job_for(self, out_dir: Path | None) -> Job | None:
         """その出力先で最後に起動した実行（画面は、自分が選んでいる出力先の実行を表示する）。"""
         if out_dir is None:
@@ -140,6 +150,7 @@ class JobManager:
                 {k: v for k, v in other.to_dict().items() if k in ("run_id", "out", "trigger", "started_at", "concurrency")}
                 for other in running if other is not job
             ],
+            "skills_in_use": sorted(self.skills_in_use()),
             "server": {"active_sessions": self._global_slots.busy_count(), "max_sessions": self._global_slots.limit},
         }
 

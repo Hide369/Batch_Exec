@@ -183,9 +183,15 @@ def create_app(
             raise HTTPException(401, "ログインしてください")
 
     def require_idle() -> None:
-        # スキル・対象の設定はすべての実行で共有するため、誰かの実行中に変えると、どの設定で動いた結果か分からなくなる
+        # 対象の設定はすべての実行で共有するため、誰かの実行中に変えると、どの設定で動いた結果か分からなくなる
         if jobs.running:
             raise HTTPException(409, "実行中は設定を変更できません。すべての実行が終了してから変更してください")
+
+    def require_skill_not_in_use(name: str) -> None:
+        # 実行中でもスキルの追加・変更はできる。ただし動いている実行が使っているスキルは、
+        # 途中から内容が変わらないよう、その実行が終わるまで変えさせない
+        if name in jobs.skills_in_use():
+            raise HTTPException(409, f"スキル {name} は実行中の処理で使われているため変更できません。その実行が終了してから変更してください")
 
     def client_id(request: Request) -> str | None:
         return getattr(request.state, "client_id", None)
@@ -519,7 +525,7 @@ def create_app(
         except FileNotFoundError as e:
             raise HTTPException(404, "スキルが登録されていません") from e
 
-    @app.put("/api/skills/{name}", dependencies=[Depends(require_admin), Depends(require_idle)])
+    @app.put("/api/skills/{name}", dependencies=[Depends(require_admin), Depends(require_skill_not_in_use)])
     def upload_skill(name: str, body: SkillUpload) -> dict:
         try:
             files = [SkillFile(f.path, base64.b64decode(f.content_b64, validate=True)) for f in body.files]
@@ -530,14 +536,14 @@ def create_app(
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
 
-    @app.put("/api/skills/{name}/label", dependencies=[Depends(require_admin), Depends(require_idle)])
+    @app.put("/api/skills/{name}/label", dependencies=[Depends(require_admin)])  # 表示名だけなので実行中でも変えられる
     def set_skill_label(name: str, body: SkillLabel) -> dict:
         try:
             return skills.set_label(name, body.label)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
 
-    @app.delete("/api/skills/{name}", dependencies=[Depends(require_admin), Depends(require_idle)])
+    @app.delete("/api/skills/{name}", dependencies=[Depends(require_admin), Depends(require_skill_not_in_use)])
     def remove_skill(name: str) -> dict:
         try:
             skills.remove(name)
@@ -545,7 +551,7 @@ def create_app(
             raise HTTPException(400, str(e)) from e
         return {"skills": all_skills()}
 
-    @app.post("/api/skills/{name}/restore", dependencies=[Depends(require_admin), Depends(require_idle)])
+    @app.post("/api/skills/{name}/restore", dependencies=[Depends(require_admin), Depends(require_skill_not_in_use)])
     def restore_skill(name: str) -> dict:
         try:
             return skills.restore(name)
