@@ -64,6 +64,29 @@ def _strip_fence(text: str) -> str:
     return m.group(1) if m else text.strip()
 
 
+# 依頼文で使っている囲みのタグ。ソースの全文を出力させると、モデルがこのタグごと返すことがある
+_SOURCE_TAG_RE = re.compile(r"^<(source|previous_attempt)>\s*\n(.*)\n\s*</\1>$", re.DOTALL)
+# 行頭の ``` で始まる囲み（前置き・後書きの説明文が付いていても、中のソースだけを取り出す）
+_FENCED_BLOCK_RE = re.compile(r"^```[\w+#.-]*[ \t]*\n(.*?)\n```[ \t]*$", re.DOTALL | re.MULTILINE)
+
+
+def _extract_source(text: str) -> str:
+    """ソースの全文を出力させたときの応答から、ソースだけを取り出す。
+
+    指示しても「以下がコメントを追記したファイルです」のような前置きや ``` の囲み、<source> タグを付けることがあり、
+    そのままだとコメント以外の変更として毎回不合格になる。囲みが1つだけのときに限り中身を使う
+    （ソース自体が ``` を含む場合に取り違えないよう、2つ以上あれば何もしない）。
+    """
+    body = _strip_fence(text)
+    if body == text.strip():
+        blocks = _FENCED_BLOCK_RE.findall(body)
+        if len(blocks) == 1:
+            body = blocks[0]
+    if m := _SOURCE_TAG_RE.match(body.strip()):
+        body = m.group(2)
+    return body
+
+
 _INPUT_TOKEN_KEYS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 
 
@@ -132,7 +155,7 @@ def build_doc_graph(llm: ChatModel, task: Task, *, max_attempts: int) -> StateGr
         if observer:
             observer.log(f"生成 {attempt} 回目が完了（{metrics['elapsed_s']:.0f}秒・{metrics['num_turns'] or '?'}ターン）")
         return {
-            "draft": _strip_fence(response.content),
+            "draft": _extract_source(response.content) if task.outputs_source else _strip_fence(response.content),
             "attempts": state["attempts"] + 1,
             "llm_calls": state["llm_calls"] + [metrics],
         }
@@ -145,7 +168,7 @@ def build_doc_graph(llm: ChatModel, task: Task, *, max_attempts: int) -> StateGr
                 observer.log("検証OK")
             return {"status": "done", "issues": []}
         if observer:
-            summary = "; ".join(issues)[:300]
+            summary = "; ".join(issues)[:800]  # 元の行と出力の行を含むため長めに残す
             next_step = "再生成します" if state["attempts"] < max_attempts else "上限に達しました"
             observer.log(f"検証NG（{len(issues)} 件: {summary}）→ {next_step}")
         if state["attempts"] >= max_attempts:

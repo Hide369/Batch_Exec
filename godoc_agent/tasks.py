@@ -22,7 +22,7 @@ from .prompts import (
     build_rewrite_messages,
 )
 from .skill_registry import COMMENT, COMMENT_ONLY, DOC, DOCUMENT, REWRITE, SkillDef
-from .source_common import SourceFacts, first_code_difference
+from .source_common import SourceFacts, find_code_difference
 
 # (rel_path, source, facts, previous_output) -> 最初に送るメッセージ
 InitialMessages = Callable[[str, str, SourceFacts, str | None], list[AnyMessage]]
@@ -45,6 +45,8 @@ class Task:
     # 指定すると、出力ファイル名を out_prefix + 拡張子を除いたソースファイル名 + out_suffix にする
     # （例: 詳細設計書_ + user.go → 詳細設計書_user.md）。フォルダ構成はソースと同じ
     out_prefix: str = ""
+    # 出力がソースファイルの全文か（コメント追記・書き換え）。前置きや <source> の囲みを外すかどうかに使う
+    outputs_source: bool = False
 
     def output_path(self, out_dir: Path, rel_path: str) -> Path:
         source = PurePosixPath(rel_path)
@@ -78,11 +80,14 @@ def find_comment_issues(draft: str, source: str, exported: list[str]) -> list[st
     # コメントの書き方は SKILL.md に任せ、ここではコードが壊されていないことだけを保証する
     if not draft.strip():
         return ["ファイルの本文が空です"]
-    line = first_code_difference(source, draft)
-    if line is not None:
+    found = find_code_difference(source, draft)
+    if found is not None:
+        # 行番号だけでは直す場所が分からず同じ間違いを繰り返しやすいため、元と出力の該当行を具体的に示す
+        if found.actual is None:
+            return [found.describe()]
         return [
-            f"コメント以外のコードが変更されています（元のファイルの {line} 行目付近）。"
-            "コードは元のまま残し、コメントの追加・修正だけを行ってください"
+            f"コメント以外のコードが変更されています。{found.describe()}。"
+            "コードは元のまま（識別子・式・文字列・改行の位置も含めて）残し、コメントの追加・修正だけを行ってください"
         ]
     return []
 
@@ -149,6 +154,7 @@ def rewrite_task(name: str, skill: str, skill_dir: Path, today: date, *, max_inp
         out_suffix="",
         # 元のリポジトリのソースは変わらないため、毎回元のソースから書き換えさせる
         uses_previous_output=False,
+        outputs_source=True,
     )
 
 
@@ -188,4 +194,5 @@ def comment_task(
         out_suffix="",
         # 元のリポジトリのソースは変わらないため、毎回元のソースから追記させる
         uses_previous_output=False,
+        outputs_source=True,
     )

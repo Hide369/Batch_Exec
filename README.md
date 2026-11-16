@@ -179,7 +179,7 @@ diff -ru /srv/repos/myapp/user_api/pkg/handler /opt/Batch_Exec/out/_commented/us
 | 表示 | 意味 | 対処 |
 |---|---|---|
 | `too_large` | ファイルが大きく、全文を1回の応答で返せない | `.env` の `LLM_NUM_PREDICT` を上げる（例：`16384`）。上限の目安は `LLM_NUM_PREDICT × 1.5` 文字 |
-| `failed_validation` | 再生成しても、コメント以外のコードを変えてしまった | 同じコマンドで再実行する（失敗したファイルだけが処理される）。繰り返す場合はスキルにコードを変更しないよう明記する |
+| `failed_validation` | 再生成しても、コメント以外のコードを変えてしまった | 同じコマンドで再実行する（失敗したファイルだけが処理される）。セッションログの「検証NG」に、元の行と出力の行・変わった字句が出るので、繰り返す場合はそれを見てスキルにその変更をしないよう明記する |
 | `error` | Claude Code の異常終了、UTF-8 で読めないソース、出力ファイルの保存失敗など（例：`error_max_turns`） | `error` 欄を確認する。ターン数不足なら `.env` の `CLAUDE_MAX_TURNS` を上げる |
 
 **手順6. 完了**
