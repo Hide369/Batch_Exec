@@ -272,3 +272,14 @@ def test_find_comment_issues_reports_truncated_output():
     truncated = "\n".join(commented(SAMPLE_GO).splitlines()[:10]) + "\n"
     (issue,) = find_comment_issues(truncated, SAMPLE_GO, [])
     assert "で終わっています" in issue and "最後まで出力" in issue
+
+
+async def test_comment_task_keeps_output_for_review_after_max_attempts():
+    broken = commented(SAMPLE_GO).replace('errors.New("empty id")', 'errors.New("id is empty")')
+    llm = ScriptedLLM([reply(broken)] * 2)
+
+    state = await run(compile_comment_graph(llm, max_attempts=2))
+
+    assert state["status"] == "needs_review"
+    assert state["draft"] == broken.strip()
+    assert "コメント以外のコードが変更されています" in state["issues"][0]

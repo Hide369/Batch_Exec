@@ -25,9 +25,11 @@ from .tasks import Task
 # ```markdown / ```go / ```csharp などで全体が囲まれていたら外す
 _FENCE_RE = re.compile(r"^```[\w-]*\s*\n(.*)\n```\s*$", re.DOTALL)
 
-Status = Literal["pending", "done", "too_large", "context_overflow", "failed_validation"]
+Status = Literal["pending", "done", "too_large", "context_overflow", "failed_validation", "needs_review"]
 # 入力が大きすぎて処理できなかった（失敗ではなく、警告付きでスキップする）状態
 SKIPPED_STATUSES = frozenset({"too_large", "context_overflow"})
+# 検証に通らなかったが、出力は残して人の確認に回す状態（Task.keep_unverified_output）
+NEEDS_REVIEW = "needs_review"
 
 
 class ChatModel(Protocol):
@@ -169,10 +171,14 @@ def build_doc_graph(llm: ChatModel, task: Task, *, max_attempts: int) -> StateGr
             return {"status": "done", "issues": []}
         if observer:
             summary = "; ".join(issues)[:800]  # 元の行と出力の行を含むため長めに残す
-            next_step = "再生成します" if state["attempts"] < max_attempts else "上限に達しました"
+            next_step = (
+                "再生成します" if state["attempts"] < max_attempts
+                else "上限に達したため、要確認として出力を残します" if task.keep_unverified_output
+                else "上限に達しました"
+            )
             observer.log(f"検証NG（{len(issues)} 件: {summary}）→ {next_step}")
         if state["attempts"] >= max_attempts:
-            return {"status": "failed_validation", "issues": issues}
+            return {"status": NEEDS_REVIEW if task.keep_unverified_output else "failed_validation", "issues": issues}
         return {
             "issues": issues,
             "messages": _with_feedback(state["prompt"], task.build_feedback(state["draft"], issues)),
