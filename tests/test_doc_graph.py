@@ -239,3 +239,36 @@ async def test_comment_task_does_not_receive_previous_output():
 
 def test_find_comment_issues_rejects_empty_output():
     assert find_comment_issues("  ", SAMPLE_GO, []) == ["ファイルの本文が空です"]
+
+
+async def test_comment_feedback_shows_original_and_changed_line():
+    # 行番号だけでなく、元の行と出力の行・変わったトークンを示して直させる
+    broken = commented(SAMPLE_GO).replace('errors.New("empty id")', 'errors.New("id is empty")')
+    llm = ScriptedLLM([reply(broken), reply(commented(SAMPLE_GO))])
+
+    await run(compile_comment_graph(llm))
+
+    feedback = llm.calls[1][-1].content
+    assert '`"empty id"` が `"id is empty"` に変わっています' in feedback
+    assert '元: `return nil, errors.New("empty id")`' in feedback
+
+
+@pytest.mark.parametrize("wrap", [
+    lambda s: "以下がコメントを追記したファイルです。\n\n```go\n" + s + "```\n\n以上です。",
+    lambda s: "<source>\n" + s + "</source>",
+    lambda s: "```go\n<source>\n" + s + "</source>\n```",
+])
+async def test_comment_task_ignores_preamble_fence_and_source_tag(wrap):
+    llm = ScriptedLLM([reply(wrap(commented(SAMPLE_GO)))])
+
+    state = await run(compile_comment_graph(llm))
+
+    assert state["status"] == "done"
+    assert state["attempts"] == 1
+    assert state["draft"].strip() == commented(SAMPLE_GO).strip()
+
+
+def test_find_comment_issues_reports_truncated_output():
+    truncated = "\n".join(commented(SAMPLE_GO).splitlines()[:10]) + "\n"
+    (issue,) = find_comment_issues(truncated, SAMPLE_GO, [])
+    assert "で終わっています" in issue and "最後まで出力" in issue

@@ -69,3 +69,11 @@ def test_adding_comments_is_not_a_code_change():
 
     assert first_code_difference(SAMPLE_CS, commented) is None
     assert first_code_difference(SAMPLE_CS, SAMPLE_CS.replace('id != ""', 'id == ""')) == 24
+
+
+def test_verbatim_string_with_trailing_backslash():
+    # @"C:\temp\" の \ はエスケープではない。誤ると後ろに付けたコメントまで文字列とみなし、コードの変更と誤判定する
+    source = 'class A\n{\n    string P = @"C:\\temp\\";\n    string Q = @"say ""hi"" // x";\n}\n'
+    commented = source.replace('@"C:\\temp\\";', '@"C:\\temp\\"; // 作業フォルダ')
+    assert first_code_difference(source, commented) is None
+    assert first_code_difference(source, source.replace('""hi""', '""bye""')) == 4

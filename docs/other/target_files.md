@@ -130,7 +130,7 @@ exclude = ["**/bin/**", "**/obj/**", "**/*Tests.cs", "**/*.Designer.cs", "**/*.g
 ### 設定では変えられないもの
 
 - 対応言語の追加（`go`・`csharp`・`typescript` 以外）：`<言語>_source.py` に `extract_facts()` を作り、[analyzers.py](../godoc_agent/analyzers.py) の `ANALYZERS` に1行足す
-- コメント以外の差分の検出（コメント追記の検証）：全言語で共通の C 系の字句規則（`//`・`/* */`・`"`・`'`・`` ` ``）を使う。C# の `@"..."` や TypeScript の正規表現リテラルは正しく扱えないことがある（[source_common.py](../godoc_agent/source_common.py) の TODO を参照）
+- コメント以外の差分の検出（コメント追記の検証）：全言語で共通の C 系の字句規則（`//`・`/* */`・`"`・`'`・`` ` ``・C# の `@"..."`）を使う。C# の生文字列リテラル（`"""`）や TypeScript の正規表現リテラルは正しく扱えないことがある。不合格のときは、元の行と出力の行・変わった字句をログと再生成の依頼に示す。出力に前置きや ``` の囲み・`<source>` タグが付いていても、中のソースだけを取り出して判定する（[source_common.py](../godoc_agent/source_common.py) の TODO を参照）
 
 ## 5. 設計書スキル
 
