@@ -188,6 +188,32 @@
       </div>
       <div id="schedule-msg"></div>
     </form>
+
+    <h3 style="margin-bottom:4px">当日のみ <span id="once-badge"></span></h3>
+    <p class="muted small" style="margin-top:0">
+      今日の指定した時刻に1回だけ、上のフォルダで実行します（毎日の定期実行とは別。複数予約でき、実行前なら取り消せます）。
+      別の実行が動いていれば終わってから実行します。今日のうちに実行できなかった予約は実行しません。
+    </p>
+    <form id="once-form">
+      <div class="row">
+        <span class="label">時刻</span>
+        <input id="once-time" type="time" required data-admin>
+      </div>
+      <div class="row"><span class="label">スキル</span><div id="once-tasks"></div></div>
+      <div class="row">
+        <span class="label">ソース更新</span>
+        <label><input id="once-git-pull" type="checkbox" checked data-admin> 実行前に対象フォルダを git pull する（失敗したら生成しない）</label>
+      </div>
+      <div class="row">
+        <span class="label"></span>
+        <button id="once-add" class="primary" type="submit" data-admin>今日だけ予約</button>
+      </div>
+      <div id="once-msg"></div>
+    </form>
+    <table id="once-table" class="hidden">
+      <thead><tr><th>時刻</th><th>状態</th><th>スキル</th><th>出力先</th><th></th></tr></thead>
+      <tbody id="once-list"></tbody>
+    </table>
   </section>
 
   <section>

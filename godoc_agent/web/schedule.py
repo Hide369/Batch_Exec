@@ -1,4 +1,8 @@
-"""Web 画面に内蔵した定期実行（毎日決まった時刻に、設定を保存した人が選んでいたフォルダで runner を実行する）。
+"""Web 画面に内蔵した定期実行（毎日決まった時刻に、設定を保存した人が選んでいたフォルダで runner を実行する）と、
+当日のみの予約実行（今日の決まった時刻に1回だけ実行する）。
+
+- 当日のみの予約は、予約したブラウザで選んでいたフォルダで、今日のその時刻に1回だけ実行する。複数登録でき、実行前なら取り消せる。
+  別の実行が動いていれば終わってから実行し、その日のうちに実行できなかったものは翌日「実行されなかった」として残す（翌日の分は消す）
 
 - 実行時刻に Web 画面が止まっていた場合は、起動後にその日の分を実行する
 - 実行時刻に別の実行が動いていれば、終わってから実行する（その日のうちは待ち続ける）
@@ -10,6 +14,7 @@
 import json
 import logging
 import re
+import secrets
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
@@ -18,7 +23,7 @@ from pathlib import Path
 
 from ..runlock import is_locked
 from ..skill_registry import COMMENT, DOC
-from .jobs import SCHEDULED, Job, JobBusy, JobManager
+from .jobs import ONCE, SCHEDULED, Job, JobBusy, JobManager
 from .skills import SkillStore
 from .workspace import WorkspaceStore
 
@@ -27,6 +32,10 @@ log = logging.getLogger(__name__)
 # 実行時刻になったかを確かめる間隔（秒）
 CHECK_INTERVAL_S = 30
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+# 1日に登録できる当日のみの予約の数（取り消し・実行済みを含む）
+MAX_ONCE_PER_DAY = 20
+# 当日のみの予約の状態
+PENDING, STARTED, FAILED, CANCELLED, MISSED = "pending", "started", "failed", "cancelled", "missed"
 
 
 @dataclass(frozen=True)
@@ -40,6 +49,8 @@ class Schedule:
     # 内部の記録（画面からは変えない）
     last_attempt_date: str | None = None  # この日の分は実行済み（または実行できないと確定した）
     last_run: dict | None = None  # 直近の定期実行（run_id・開始時刻、または実行できなかった理由）
+    # 当日のみの予約（OnceRun を dict にしたもの）。毎日の定期実行とは別に動く
+    once: list[dict] = field(default_factory=list)
 
     def due_at(self, day: date) -> datetime:
         hour, minute = map(int, self.time.split(":"))
@@ -53,6 +64,32 @@ class Schedule:
             return self.due_at(today + timedelta(days=1))
         # 今日の分がまだなら、時刻を過ぎていても（待っている間も）今日の時刻を表示する
         return self.due_at(today)
+
+
+@dataclass(frozen=True)
+class OnceRun:
+    """当日のみの予約1件。"""
+
+    id: str
+    date: str  # 実行する日（予約した日）
+    time: str
+    tasks: list[str]
+    git_pull: bool
+    repo: str | None
+    out: str | None
+    created_at: str
+    status: str = PENDING
+    run_id: str | None = None
+    started_at: str | None = None
+    error: str | None = None
+
+    def due_at(self) -> datetime:
+        hour, minute = map(int, self.time.split(":"))
+        return datetime.combine(date.fromisoformat(self.date), time(hour, minute))
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "OnceRun":
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
 def validate_time(value: str) -> str:
@@ -72,7 +109,15 @@ class ScheduleStore:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             known = {k: v for k, v in data.items() if k in Schedule.__dataclass_fields__}
-            return Schedule(**known)
+            schedule = Schedule(**known)
+            # 壊れた予約は読み飛ばす（ほかの予約・毎日の定期実行は動かす）
+            once = []
+            for item in schedule.once if isinstance(schedule.once, list) else []:
+                try:
+                    once.append(asdict(OnceRun.from_dict(item)))
+                except (TypeError, AttributeError):
+                    log.warning("当日のみの予約を読めないため無視します: %r", item)
+            return replace(schedule, once=once)
         except (json.JSONDecodeError, TypeError, AttributeError):
             log.warning("定期実行の設定を読めないため、既定値（無効）を使います: %s", self.path)
             return Schedule()
@@ -109,6 +154,77 @@ class ScheduleStore:
 
         return self.update(apply)
 
+    # --- 当日のみの予約 --------------------------------------------------------------------
+
+    def once_runs(self, schedule: Schedule | None = None) -> list[OnceRun]:
+        return [OnceRun.from_dict(item) for item in (schedule or self.get()).once]
+
+    def add_once(
+        self, time_: str, tasks: list[str], git_pull: bool, now: datetime, *, repo: str | None, out: str | None,
+    ) -> OnceRun:
+        validate_time(time_)
+        if not tasks:
+            raise ValueError("タスクを1つ以上選んでください")
+        if not repo or not out:
+            raise ValueError("対象フォルダと出力先フォルダを設定してから予約してください")
+        today = now.date().isoformat()
+        run = OnceRun(
+            id=secrets.token_hex(6), date=today, time=time_, tasks=list(dict.fromkeys(tasks)), git_pull=git_pull,
+            repo=repo, out=out, created_at=now.isoformat(timespec="seconds"),
+        )
+        # 今日の時刻を過ぎていたら受け付けない（「当日のみ」なので翌日には回さない。すぐ実行したいときは手動で実行する）
+        if run.due_at() <= now.replace(second=0, microsecond=0) - timedelta(minutes=1):
+            raise ValueError(f"{time_} はすでに過ぎています。今日のこれからの時刻を指定してください（すぐ実行するときは「実行」から）")
+
+        def apply(current: Schedule) -> Schedule:
+            todays = [r for r in self.once_runs(current) if r.date == today]
+            if len(todays) >= MAX_ONCE_PER_DAY:
+                raise ValueError(f"当日のみの予約は1日 {MAX_ONCE_PER_DAY} 件までです")
+            return replace(current, once=[*current.once, asdict(run)])
+
+        self.update(apply)
+        return run
+
+    def cancel_once(self, once_id: str) -> OnceRun:
+        found: list[OnceRun] = []
+
+        def apply(current: Schedule) -> Schedule:
+            runs = self.once_runs(current)
+            target = next((r for r in runs if r.id == once_id), None)
+            if target is None:
+                raise LookupError("予約が見つかりません")
+            if target.status != PENDING:
+                raise ValueError("すでに実行した（または取り消した）予約は取り消せません")
+            cancelled = replace(target, status=CANCELLED)
+            found.append(cancelled)
+            return replace(current, once=[asdict(cancelled if r.id == once_id else r) for r in runs])
+
+        self.update(apply)
+        return found[0]
+
+    def update_once(self, once_id: str, **changes) -> None:
+        def apply(current: Schedule) -> Schedule:
+            return replace(current, once=[
+                asdict(replace(r, **changes) if r.id == once_id else r) for r in self.once_runs(current)
+            ])
+
+        self.update(apply)
+
+    def prune_once(self, today: date) -> None:
+        """前日までの予約を片付ける。実行されずに日を越えた予約は「実行されなかった」として前日分だけ残す。"""
+        today_s, yesterday = today.isoformat(), (today - timedelta(days=1)).isoformat()
+        with self._lock:
+            current = self.get()
+            kept = []
+            for r in self.once_runs(current):
+                if r.date < today_s and r.status == PENDING:
+                    log.warning("当日のみの予約（%s %s）は、その日のうちに実行できませんでした", r.date, r.time)
+                    r = replace(r, status=MISSED)
+                if r.date >= today_s or (r.date == yesterday and r.status == MISSED):
+                    kept.append(asdict(r))
+            if kept != current.once:
+                self._write(replace(current, once=kept))
+
 
 class Scheduler:
     """実行時刻になったら runner を起動する。tick() を定期的に呼ぶ（テストからは直接呼ぶ）。"""
@@ -130,6 +246,12 @@ class Scheduler:
         self._thread: threading.Thread | None = None
 
     def tick(self) -> Job | None:
+        """毎日の定期実行と、当日のみの予約のうち時刻になったものを起動する。起動した実行（毎日の定期実行を優先）を返す。"""
+        daily = self._tick_daily()
+        once = self._tick_once()
+        return daily or once
+
+    def _tick_daily(self) -> Job | None:
         schedule = self.store.get()
         now = self.clock()
         today = now.date().isoformat()
@@ -139,31 +261,61 @@ class Scheduler:
         ws = self.workspace.get()
         repo_raw, out_raw = (schedule.repo, schedule.out) if schedule.repo and schedule.out else (ws.repo, ws.out)
         try:
-            if not repo_raw or not out_raw:
-                raise ValueError("対象フォルダ・出力先フォルダが未設定です")
-            repo, out = self.workspace.check_repo(repo_raw), self.workspace.check_out(out_raw)
-            # 登録を外したスキルのタスクは除く（設計書スキルがなければ実行できない）
-            tasks = [t for t in schedule.tasks if self.skills.is_registered(t)]
-            if not tasks:
-                raise ValueError("選んだタスクのスキルが登録されていません")
+            repo, out, tasks = self._check(repo_raw, out_raw, schedule.tasks)
         except (ValueError, PermissionError) as e:
             # 設定の誤りは、その日のうちに待っても直らないので、今日の分は実行できなかったとして記録する
             self._record(today, {"error": str(e), "at": now.isoformat(timespec="seconds")})
             log.warning("定期実行を開始できませんでした: %s", e)
             return None
 
+        job = self._start(repo, out, tasks, schedule.git_pull)
+        if job is None:
+            return None
+        self._record(today, {"run_id": job.run_id, "started_at": job.started_at, "out": str(out)})
+        log.info("定期実行を開始しました: run_id=%s", job.run_id)
+        return job
+
+    def _tick_once(self) -> Job | None:
+        now = self.clock()
+        self.store.prune_once(now.date())
+        first: Job | None = None
+        for run in self.store.once_runs():
+            if run.status != PENDING or run.date != now.date().isoformat() or now < run.due_at():
+                continue
+            try:
+                repo, out, tasks = self._check(run.repo, run.out, run.tasks)
+            except (ValueError, PermissionError) as e:
+                self.store.update_once(run.id, status=FAILED, error=str(e))
+                log.warning("当日のみの予約（%s）を開始できませんでした: %s", run.time, e)
+                continue
+            job = self._start(repo, out, tasks, run.git_pull, ONCE)
+            if job is None:
+                continue  # 同じ出力先で実行中。終わってから実行する
+            self.store.update_once(run.id, status=STARTED, run_id=job.run_id, started_at=job.started_at)
+            log.info("当日のみの予約（%s）を開始しました: run_id=%s", run.time, job.run_id)
+            first = first or job
+        return first
+
+    def _check(self, repo_raw: str | None, out_raw: str | None, wanted: list[str]) -> tuple[Path, Path, list[str]]:
+        if not repo_raw or not out_raw:
+            raise ValueError("対象フォルダ・出力先フォルダが未設定です")
+        repo, out = self.workspace.check_repo(repo_raw), self.workspace.check_out(out_raw)
+        # 登録を外したスキルのタスクは除く（設計書スキルがなければ実行できない）
+        tasks = [t for t in wanted if self.skills.is_registered(t)]
+        if not tasks:
+            raise ValueError("選んだタスクのスキルが登録されていません")
+        return repo, out, tasks
+
+    def _start(self, repo: Path, out: Path, tasks: list[str], git_pull: bool, trigger: str = SCHEDULED) -> Job | None:
         # 同じ出力先で手動の実行・コマンドからの実行が動いていれば、終わってから実行する
         # （別の出力先の実行とは同時に動く。セッション数はサーバー全体で抑えられる）
         same_out = self.jobs.job_for(out)
         if (same_out is not None and same_out.running) or is_locked(out):
             return None
         try:
-            job = self.jobs.start(repo, out, tasks, 0, False, git_pull=schedule.git_pull, trigger=SCHEDULED)
+            return self.jobs.start(repo, out, tasks, 0, False, git_pull=git_pull, trigger=trigger)
         except JobBusy:
             return None
-        self._record(today, {"run_id": job.run_id, "started_at": job.started_at, "out": str(out)})
-        log.info("定期実行を開始しました: run_id=%s", job.run_id)
-        return job
 
     def _record(self, day: str, last_run: dict) -> None:
         self.store.update(lambda s: replace(s, last_attempt_date=day, last_run=last_run))

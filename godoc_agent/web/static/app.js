@@ -24,6 +24,12 @@ const state = {
   taskOptions: [],  // 実行に使える（登録済みの）スキル [{name, label, type}]
 };
 
+const TRIGGER_LABELS = { scheduled: "定期実行", once: "当日のみ", manual: "手動" };
+
+function triggerLabel(trigger) {
+  return TRIGGER_LABELS[trigger] ?? "手動";
+}
+
 function taskLabel(name) {
   return state.taskOptions.find((t) => t.name === name)?.label ?? name;
 }
@@ -399,6 +405,9 @@ async function loadSchedule() {
   const missing = schedule.tasks.filter((n) => !state.taskOptions.some((t) => t.name === n))
     .map((name) => ({ name, label: name, type: "", missing: true }));
   renderPicker($("schedule-tasks"), [...state.taskOptions, ...missing], schedule.tasks);
+  // 当日のみの予約のスキルは、実行タブで選んでいるものを初期値にする
+  const onceSelected = $("once-tasks").children.length ? pickerValues($("once-tasks")) : pickerValues($("tasks"));
+  renderPicker($("once-tasks"), state.taskOptions, onceSelected);
   renderScheduleInfo(schedule);
   applyPermissions();
 }
@@ -411,7 +420,67 @@ function renderScheduleInfo(schedule) {
   if (last?.run_id) parts.push(`前回 ${last.run_id}`);
   else if (last?.error) parts.push(`前回 ${fmtTime(last.at)} 開始できず: ${last.error}`);
   $("schedule-info").textContent = parts.join(" / ");
+  renderOnce(schedule.once ?? []);
 }
+
+// --- 当日のみの予約 ---
+
+const ONCE_STATUS = {
+  pending: ["予約中", "running"],
+  started: ["開始済み", "ok"],
+  failed: ["開始できず", "fail"],
+  cancelled: ["取り消し", "idle"],
+  missed: ["実行されず", "warn"],
+};
+
+function renderOnce(runs) {
+  const pending = runs.filter((r) => r.status === "pending").length;
+  $("once-badge").replaceChildren(pending ? badge(`予約 ${pending} 件`, "ok") : badge("予約なし", "idle"));
+  $("once-table").classList.toggle("hidden", runs.length === 0);
+  $("once-list").replaceChildren(...runs.map((r) => {
+    const [label, cls] = ONCE_STATUS[r.status] ?? [r.status, "idle"];
+    const detail = r.run_id ? ` ${r.run_id}` : r.error ? ` ${r.error}` : "";
+    const cancel = r.status === "pending"
+      ? el("button", { type: "button", textContent: "取り消す", onclick: () => cancelOnce(r) })
+      : "";
+    if (cancel) cancel.dataset.admin = "";
+    return el("tr", {},
+      el("td", { className: "mono", textContent: r.status === "missed" ? `${r.date} ${r.time}` : r.time }),
+      el("td", {}, badge(label, cls), el("span", { className: "muted small", textContent: detail })),
+      el("td", { textContent: r.tasks.map(taskLabel).join("・") }),
+      el("td", { className: "mono small", textContent: r.out ?? "" }),
+      el("td", {}, cancel));
+  }));
+  applyPermissions();
+}
+
+async function cancelOnce(run) {
+  if (!confirm(`${run.time} の予約を取り消しますか？`)) return;
+  $("once-msg").textContent = "";
+  try {
+    renderScheduleInfo(await send("DELETE", `/api/schedule/once/${encodeURIComponent(run.id)}`));
+    message("once-msg", `${run.time} の予約を取り消しました`, true);
+  } catch (err) {
+    message("once-msg", err.message);
+  }
+}
+
+$("once-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("once-msg").textContent = "";
+  const tasks = pickerValues($("once-tasks"));
+  if (tasks.length === 0) {
+    message("once-msg", "スキルを1つ以上選んでください");
+    return;
+  }
+  const time = $("once-time").value;
+  try {
+    renderScheduleInfo(await send("POST", "/api/schedule/once", { time, tasks, git_pull: $("once-git-pull").checked }));
+    message("once-msg", `今日の ${time} に実行するよう予約しました`, true);
+  } catch (err) {
+    message("once-msg", err.message);
+  }
+});
 
 $("schedule-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -450,7 +519,7 @@ async function refreshStatus() {
   else status = badge("待機中", "idle");
   $("status").replaceChildren(status);
   $("status-detail").textContent = job
-    ? `${job.trigger === "scheduled" ? "定期実行" : "手動"} / run_id=${job.run_id} / ${job.tasks.map(taskLabel).join("・") || "既定のタスク"}`
+    ? `${triggerLabel(job.trigger)} / run_id=${job.run_id} / ${job.tasks.map(taskLabel).join("・") || "既定のタスク"}`
       + `${job.limit ? ` / 上限 ${job.limit} 件` : ""}${job.force ? " / 再生成" : ""}${job.git_pull ? " / git pull" : ""}`
       + ` / 同時 ${job.concurrency ?? "既定数の"} セッション`
       + ` / 開始 ${fmtTime(job.started_at)}${job.finished_at ? ` / 終了 ${fmtTime(job.finished_at)}` : ""}`
@@ -481,7 +550,7 @@ function renderServerLoad(others, server) {
     lines.push(`サーバー全体の Claude Code セッション: 起動中 ${server.active_sessions} / 空き ${free}（上限 ${server.max_sessions}）`);
   }
   for (const other of others) {
-    lines.push(`他の実行: ${other.trigger === "scheduled" ? "定期実行" : "手動"} / run_id=${other.run_id}`
+    lines.push(`他の実行: ${triggerLabel(other.trigger)} / run_id=${other.run_id}`
       + ` / 開始 ${fmtTime(other.started_at)} / 出力 ${other.out}`);
   }
   $("server-load").textContent = lines.join("\n");
@@ -976,9 +1045,10 @@ async function tick() {
     const jobKey = job ? `${job.run_id}:${job.running}` : "";
     if (jobKey !== lastJobKey) {
       await Promise.all([refreshHistory(), refreshOutputs()]);
-      renderScheduleInfo(await api("/api/schedule"));
       lastJobKey = jobKey;
     }
+    // 定期実行の次回予定・当日のみの予約は、他のブラウザでの変更や予約の開始も反映するよう毎回読み直す
+    renderScheduleInfo(await api("/api/schedule"));
   } catch (err) {
     if (err.status === 401) await start();
   }

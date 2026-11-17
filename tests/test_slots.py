@@ -63,3 +63,39 @@ async def test_session_waits_for_server_wide_slot_held_by_another_run(tmp_path: 
     assert started.is_set()
     # 終わったら全体の枠も返す
     assert global_slots.busy_count() == 0
+
+
+def test_busy_count_from_many_threads_does_not_count_each_others_probe(tmp_path):
+    # Web 画面を複数のブラウザで開くと、状態の問い合わせが別スレッドで同時に来る。
+    # 互いの確かめを「使用中」と数えると、画面ごとに起動中・空きの数が食い違っていた
+    import threading
+
+    global_slots = GlobalSlots(tmp_path, limit=10)
+    held = global_slots.try_acquire()  # 枠のファイルを作っておき、1つだけ使用中にする
+    others = [global_slots.try_acquire() for _ in range(9)]
+    for slot in others:
+        slot.release()
+    counts: list[int] = []
+
+    def poll():
+        for _ in range(100):
+            counts.append(global_slots.busy_count())
+
+    threads = [threading.Thread(target=poll) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert set(counts) == {1}
+    held.release()
+
+
+def test_busy_count_is_reused_for_a_short_time(tmp_path):
+    now = [0.0]
+    global_slots = GlobalSlots(tmp_path, limit=2, busy_cache_s=1.0, clock=lambda: now[0])
+    assert global_slots.busy_count() == 0
+    slot = GlobalSlots(tmp_path, limit=2).try_acquire()
+    assert global_slots.busy_count() == 0  # 直前の結果（どの画面にも同じ数を返す）
+    now[0] = 1.0
+    assert global_slots.busy_count() == 1
+    slot.release()

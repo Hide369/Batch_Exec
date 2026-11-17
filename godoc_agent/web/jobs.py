@@ -25,7 +25,7 @@ from ..config import MAX_CONCURRENCY
 from ..runlock import LOCK_FILE_NAME, is_locked
 from ..skill_registry import COMMENT, DOC
 from ..sessions import sessions_path
-from ..slots import GlobalSlots
+from ..slots import BUSY_COUNT_CACHE_S, GlobalSlots
 from .settings import APP_DIR
 
 # 停止を指示してから、応じないプロセスを強制終了するまでの秒数
@@ -36,7 +36,8 @@ _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # 実行のきっかけ（run_id の先頭にも使う）
 MANUAL = "manual"
 SCHEDULED = "scheduled"
-_RUN_ID_PREFIX = {MANUAL: "web", SCHEDULED: "scheduled"}
+ONCE = "once"  # 当日のみの予約
+_RUN_ID_PREFIX = {MANUAL: "web", SCHEDULED: "scheduled", ONCE: "once"}
 # Web 画面から同時に動かせる runner の数。runner は最低1セッション使うため、全体のセッション数の上限より多くしても意味がない
 MAX_RUNNING_JOBS = MAX_CONCURRENCY
 # 終了した実行を、状態の表示用に覚えておく数（出力先ごとの直近の1件は数に関係なく残す）
@@ -102,7 +103,7 @@ class JobManager:
     def __init__(self, runner_cmd: list[str] | None = None, cwd: Path = APP_DIR, global_slots: GlobalSlots | None = None):
         self._runner_cmd = runner_cmd or [sys.executable, "-m", "godoc_agent.runner"]
         self._cwd = cwd
-        self._global_slots = global_slots or GlobalSlots()
+        self._global_slots = global_slots or GlobalSlots(busy_cache_s=BUSY_COUNT_CACHE_S)
         # 起動した順。終了したものも、状態の表示のためにしばらく残す
         self._jobs: dict[str, Job] = {}
         self._lock = threading.Lock()
