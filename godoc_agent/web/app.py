@@ -14,6 +14,7 @@ import secrets
 import tempfile
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -68,6 +69,12 @@ class StopRequest(BaseModel):
 
 class ScheduleRequest(BaseModel):
     enabled: bool
+    time: str = Field(min_length=5, max_length=5)
+    tasks: list[str] = Field(min_length=1, max_length=MAX_TASKS)
+    git_pull: bool = True
+
+
+class OnceRequest(BaseModel):
     time: str = Field(min_length=5, max_length=5)
     tasks: list[str] = Field(min_length=1, max_length=MAX_TASKS)
     git_pull: bool = True
@@ -403,6 +410,10 @@ def create_app(
             "out": schedule.out,
             "next_run_at": next_run.isoformat(timespec="minutes") if next_run else None,
             "last_run": schedule.last_run,
+            # 当日のみの予約（今日の分と、前日に実行されなかった分）。時刻順
+            "once": sorted(
+                (asdict(r) for r in schedule_store.once_runs(schedule)), key=lambda r: (r["date"], r["time"], r["created_at"]),
+            ),
         }
 
     @app.get("/api/schedule", dependencies=[Depends(require_viewer)])
@@ -423,6 +434,29 @@ def create_app(
             )
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
+        return schedule_view()
+
+    @app.post("/api/schedule/once", status_code=201, dependencies=[Depends(require_admin)])
+    def add_once(body: OnceRequest, request: Request) -> dict:
+        """今日の指定した時刻に1回だけ実行する予約。予約したブラウザでいま選んでいるフォルダで動かす。"""
+        tasks = check_tasks(body.tasks)
+        ws = current_workspace(request)
+        if body.git_pull and ws.repo:
+            check_pullable(Path(ws.repo))
+        try:
+            schedule_store.add_once(body.time, tasks, body.git_pull, clock(), repo=ws.repo, out=ws.out)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        return schedule_view()
+
+    @app.delete("/api/schedule/once/{once_id}", dependencies=[Depends(require_admin)])
+    def cancel_once(once_id: str) -> dict:
+        try:
+            schedule_store.cancel_once(once_id)
+        except LookupError as e:
+            raise HTTPException(404, str(e)) from e
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
         return schedule_view()
 
     # --- フォルダ（管理者だけ） ------------------------------------------------------------

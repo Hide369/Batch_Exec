@@ -339,3 +339,140 @@ def test_pull_and_run_checks_repo_again_at_run_time(root, capsys):
 )
 def test_credentials_in_remote_url_are_hidden_in_logs(url, expected):
     assert redact_url(url) == expected
+
+
+# --- 当日のみの予約 ---------------------------------------------------------------------------
+
+
+def add_once(client: TestClient, **body):
+    payload = {"time": "03:00", "tasks": ["doc"], "git_pull": False, **body}
+    return client.post("/api/schedule/once", json=payload, headers=CSRF)
+
+
+def once_list(client: TestClient) -> list[dict]:
+    return client.get("/api/schedule").json()["once"]
+
+
+def test_once_runs_today_at_the_time_only_once(sched_client, jobs, clock, repo_dir, out_dir):
+    assert add_once(sched_client).status_code == 201
+    [run] = once_list(sched_client)
+    assert (run["date"], run["time"], run["status"]) == ("2026-11-08", "03:00", "pending")
+    assert run["out"] == str(out_dir.resolve())
+    sch = scheduler(sched_client)
+
+    clock.now = datetime(2026, 11, 8, 2, 59)
+    assert sch.tick() is None
+    clock.now = datetime(2026, 11, 8, 3, 0)
+    job = sch.tick()
+    assert job is not None
+    assert job.run_id.startswith("once-")
+    assert job.trigger == "once"
+    wait_finished(jobs)
+    assert f"--out {out_dir.resolve()}" in log_text(sched_client, job.run_id)
+    [run] = once_list(sched_client)
+    assert (run["status"], run["run_id"]) == ("started", job.run_id)
+
+    # 1回だけ。翌日の同じ時刻にも実行しない
+    clock.now = datetime(2026, 11, 8, 23, 0)
+    assert sch.tick() is None
+    clock.now = datetime(2026, 11, 9, 3, 0)
+    assert sch.tick() is None
+    assert once_list(sched_client) == []  # 前日の実行済みの予約は片付ける
+
+
+def test_once_does_not_change_the_daily_schedule(sched_client, clock):
+    save_schedule(sched_client, enabled=False)
+    assert add_once(sched_client).status_code == 201
+    schedule = sched_client.get("/api/schedule").json()
+    assert schedule["enabled"] is False
+    assert schedule["next_run_at"] is None
+    clock.now = datetime(2026, 11, 8, 3, 0)
+    assert scheduler(sched_client).tick() is not None
+
+
+def test_once_in_the_past_is_rejected(sched_client, clock):
+    clock.now = datetime(2026, 11, 8, 10, 30)
+    res = add_once(sched_client, time="10:00")
+    assert res.status_code == 400
+    assert "過ぎて" in res.json()["detail"]
+    # 今の分（10:30）は受け付けて、次の確認ですぐ実行する
+    assert add_once(sched_client, time="10:30").status_code == 201
+    assert scheduler(sched_client).tick() is not None
+
+
+@pytest.mark.parametrize("body", [{"time": "25:00"}, {"tasks": []}, {"tasks": ["unknown"]}])
+def test_invalid_once_is_rejected(sched_client, body):
+    assert add_once(sched_client, **body).status_code in (400, 422)
+    assert once_list(sched_client) == []
+
+
+def test_once_requires_admin_and_folders(make_client):
+    client = make_client()
+    assert add_once(client).status_code == 401
+    login(client)
+    res = add_once(client)
+    assert res.status_code == 400
+    assert "フォルダ" in res.json()["detail"]
+
+
+def test_once_can_be_cancelled_before_it_runs(sched_client, clock):
+    add_once(sched_client)
+    [run] = once_list(sched_client)
+    res = sched_client.delete(f"/api/schedule/once/{run['id']}", headers=CSRF)
+    assert res.status_code == 200
+    assert res.json()["once"][0]["status"] == "cancelled"
+    clock.now = datetime(2026, 11, 8, 3, 0)
+    assert scheduler(sched_client).tick() is None
+    # 取り消し済み・存在しない予約
+    assert sched_client.delete(f"/api/schedule/once/{run['id']}", headers=CSRF).status_code == 409
+    assert sched_client.delete("/api/schedule/once/nope", headers=CSRF).status_code == 404
+
+
+def test_several_once_runs_on_different_outputs(sched_client, clock, repo_dir, out_dir, root):
+    add_once(sched_client, time="03:00")
+    assert set_workspace(sched_client, repo_dir, root / "other_out").status_code == 200
+    add_once(sched_client, time="03:00")
+    clock.now = datetime(2026, 11, 8, 3, 0)
+    scheduler(sched_client).tick()
+    runs = once_list(sched_client)
+    assert [r["status"] for r in runs] == ["started", "started"]
+    assert {r["out"] for r in runs} == {str(out_dir.resolve()), str((root / "other_out").resolve())}
+
+
+def test_once_waits_for_running_job_on_same_output(sched_client, jobs, clock, monkeypatch):
+    add_once(sched_client)
+    monkeypatch.setenv("FAKE_RUNNER_SLEEP", "30")
+    start_run(sched_client)
+    clock.now = datetime(2026, 11, 8, 3, 0)
+    assert scheduler(sched_client).tick() is None
+    assert once_list(sched_client)[0]["status"] == "pending"
+
+    sched_client.post("/api/runs/stop", headers=CSRF)
+    wait_finished(jobs)
+    monkeypatch.setenv("FAKE_RUNNER_SLEEP", "0")
+    clock.now = datetime(2026, 11, 8, 3, 5)
+    assert scheduler(sched_client).tick() is not None
+
+
+def test_once_not_run_that_day_is_shown_as_missed_next_day(sched_client, clock):
+    add_once(sched_client)
+    # その日のうちに Web 画面が動いていなかった
+    clock.now = datetime(2026, 11, 9, 9, 0)
+    assert scheduler(sched_client).tick() is None
+    [run] = once_list(sched_client)
+    assert run["status"] == "missed"
+    clock.now = datetime(2026, 11, 10, 9, 0)
+    scheduler(sched_client).tick()
+    assert once_list(sched_client) == []
+
+
+def test_once_records_why_it_could_not_start(sched_client, clock, repo_dir):
+    import shutil
+
+    add_once(sched_client)
+    shutil.rmtree(repo_dir)  # 予約した後で対象フォルダがなくなった
+    clock.now = datetime(2026, 11, 8, 3, 0)
+    assert scheduler(sched_client).tick() is None
+    [run] = once_list(sched_client)
+    assert run["status"] == "failed"
+    assert "対象フォルダ" in run["error"]
