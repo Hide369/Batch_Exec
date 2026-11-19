@@ -1,8 +1,10 @@
 """Web 画面に内蔵した定期実行（毎日決まった時刻に、設定を保存した人が選んでいたフォルダで runner を実行する）と、
-当日のみの予約実行（今日の決まった時刻に1回だけ実行する）。
+当日のみの予約実行（今から24時間以内の決まった時刻に1回だけ実行する）。
 
-- 当日のみの予約は、予約したブラウザで選んでいたフォルダで、今日のその時刻に1回だけ実行する。複数登録でき、実行前なら取り消せる。
-  別の実行が動いていれば終わってから実行し、その日のうちに実行できなかったものは翌日「実行されなかった」として残す（翌日の分は消す）
+- 当日のみの予約は、予約したブラウザで選んでいたフォルダで、指定した時刻に1回だけ実行する。今日のその時刻を過ぎていれば
+  翌日のその時刻に実行する（予約できるのは今から24時間以内）。複数登録でき、実行前なら取り消せる。
+  別の実行が動いていれば終わってから実行し、予約した日のうちに実行できなかったものは翌日「実行されなかった」として残す（翌日の分は消す）
+- 定期実行・当日のみの予約の同時セッション数は、指定しなければ 1（実行タブの初期値と同じ。全枠を使う runner の既定値 10 にはしない）
 
 - 実行時刻に Web 画面が止まっていた場合は、起動後にその日の分を実行する
 - 実行時刻に別の実行が動いていれば、終わってから実行する（その日のうちは待ち続ける）
@@ -21,6 +23,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
+from ..config import MAX_CONCURRENCY
 from ..runlock import is_locked
 from ..skill_registry import COMMENT, DOC
 from .jobs import ONCE, SCHEDULED, Job, JobBusy, JobManager
@@ -34,6 +37,8 @@ CHECK_INTERVAL_S = 30
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 # 1日に登録できる当日のみの予約の数（取り消し・実行済みを含む）
 MAX_ONCE_PER_DAY = 20
+# 定期実行・当日のみの予約の同時セッション数の既定値（実行タブの初期値と同じ 1）
+DEFAULT_SCHEDULE_CONCURRENCY = 1
 # 当日のみの予約の状態
 PENDING, STARTED, FAILED, CANCELLED, MISSED = "pending", "started", "failed", "cancelled", "missed"
 
@@ -44,6 +49,7 @@ class Schedule:
     time: str = "02:00"  # サーバーの現地時刻（HH:MM）
     tasks: list[str] = field(default_factory=lambda: [DOC, COMMENT])
     git_pull: bool = True
+    concurrency: int = DEFAULT_SCHEDULE_CONCURRENCY
     repo: str | None = None
     out: str | None = None
     # 内部の記録（画面からは変えない）
@@ -78,6 +84,7 @@ class OnceRun:
     repo: str | None
     out: str | None
     created_at: str
+    concurrency: int = DEFAULT_SCHEDULE_CONCURRENCY
     status: str = PENDING
     run_id: str | None = None
     started_at: str | None = None
@@ -98,6 +105,20 @@ def validate_time(value: str) -> str:
     return value
 
 
+def validate_concurrency(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_CONCURRENCY:
+        raise ValueError(f"同時セッションは 1〜{MAX_CONCURRENCY} で指定してください: {value!r}")
+    return value
+
+
+def _concurrency_or_default(value) -> int:
+    """保存済みの値が壊れていれば既定値（1）にする。"""
+    try:
+        return validate_concurrency(value)
+    except ValueError:
+        return DEFAULT_SCHEDULE_CONCURRENCY
+
+
 class ScheduleStore:
     def __init__(self, state_dir: Path):
         self.path = state_dir / "schedule.json"
@@ -114,10 +135,11 @@ class ScheduleStore:
             once = []
             for item in schedule.once if isinstance(schedule.once, list) else []:
                 try:
-                    once.append(asdict(OnceRun.from_dict(item)))
+                    run = OnceRun.from_dict(item)
+                    once.append(asdict(replace(run, concurrency=_concurrency_or_default(run.concurrency))))
                 except (TypeError, AttributeError):
                     log.warning("当日のみの予約を読めないため無視します: %r", item)
-            return replace(schedule, once=once)
+            return replace(schedule, once=once, concurrency=_concurrency_or_default(schedule.concurrency))
         except (json.JSONDecodeError, TypeError, AttributeError):
             log.warning("定期実行の設定を読めないため、既定値（無効）を使います: %s", self.path)
             return Schedule()
@@ -135,16 +157,17 @@ class ScheduleStore:
 
     def save_settings(
         self, enabled: bool, time_: str, tasks: list[str], git_pull: bool, now: datetime,
-        *, repo: str | None = None, out: str | None = None,
+        *, repo: str | None = None, out: str | None = None, concurrency: int = DEFAULT_SCHEDULE_CONCURRENCY,
     ) -> Schedule:
         validate_time(time_)
+        validate_concurrency(concurrency)
         if not tasks:
             raise ValueError("タスクを1つ以上選んでください")
 
         def apply(current: Schedule) -> Schedule:
             new = replace(
                 current, enabled=enabled, time=time_, tasks=list(dict.fromkeys(tasks)), git_pull=git_pull,
-                repo=repo or current.repo, out=out or current.out,
+                concurrency=concurrency, repo=repo or current.repo, out=out or current.out,
             )
             # 保存した時点で今日の時刻を過ぎていれば、今日の分は実行しない（保存した途端に動き出さないように）。
             # まだ来ていなければ、今日すでに実行していても新しい時刻でもう一度実行する
@@ -161,24 +184,26 @@ class ScheduleStore:
 
     def add_once(
         self, time_: str, tasks: list[str], git_pull: bool, now: datetime, *, repo: str | None, out: str | None,
+        concurrency: int = DEFAULT_SCHEDULE_CONCURRENCY,
     ) -> OnceRun:
         validate_time(time_)
+        validate_concurrency(concurrency)
         if not tasks:
             raise ValueError("タスクを1つ以上選んでください")
         if not repo or not out:
             raise ValueError("対象フォルダと出力先フォルダを設定してから予約してください")
-        today = now.date().isoformat()
         run = OnceRun(
-            id=secrets.token_hex(6), date=today, time=time_, tasks=list(dict.fromkeys(tasks)), git_pull=git_pull,
-            repo=repo, out=out, created_at=now.isoformat(timespec="seconds"),
+            id=secrets.token_hex(6), date=now.date().isoformat(), time=time_, tasks=list(dict.fromkeys(tasks)),
+            git_pull=git_pull, repo=repo, out=out, created_at=now.isoformat(timespec="seconds"), concurrency=concurrency,
         )
-        # 今日の時刻を過ぎていたら受け付けない（「当日のみ」なので翌日には回さない。すぐ実行したいときは手動で実行する）
+        # 今日の時刻を過ぎていたら翌日のその時刻にする（予約できるのは今から24時間以内）。
+        # 今の分（1分前まで）は今日の分として受け付け、次の確認ですぐ実行する
         if run.due_at() <= now.replace(second=0, microsecond=0) - timedelta(minutes=1):
-            raise ValueError(f"{time_} はすでに過ぎています。今日のこれからの時刻を指定してください（すぐ実行するときは「実行」から）")
+            run = replace(run, date=(now.date() + timedelta(days=1)).isoformat())
 
         def apply(current: Schedule) -> Schedule:
-            todays = [r for r in self.once_runs(current) if r.date == today]
-            if len(todays) >= MAX_ONCE_PER_DAY:
+            same_day = [r for r in self.once_runs(current) if r.date == run.date]
+            if len(same_day) >= MAX_ONCE_PER_DAY:
                 raise ValueError(f"当日のみの予約は1日 {MAX_ONCE_PER_DAY} 件までです")
             return replace(current, once=[*current.once, asdict(run)])
 
@@ -211,7 +236,7 @@ class ScheduleStore:
         self.update(apply)
 
     def prune_once(self, today: date) -> None:
-        """前日までの予約を片付ける。実行されずに日を越えた予約は「実行されなかった」として前日分だけ残す。"""
+        """前日までの予約を片付ける。実行されずに日を越えた予約は「実行されなかった」として前日分だけ残す（翌日の予約は残す）。"""
         today_s, yesterday = today.isoformat(), (today - timedelta(days=1)).isoformat()
         with self._lock:
             current = self.get()
@@ -268,7 +293,7 @@ class Scheduler:
             log.warning("定期実行を開始できませんでした: %s", e)
             return None
 
-        job = self._start(repo, out, tasks, schedule.git_pull)
+        job = self._start(repo, out, tasks, schedule.git_pull, concurrency=schedule.concurrency)
         if job is None:
             return None
         self._record(today, {"run_id": job.run_id, "started_at": job.started_at, "out": str(out)})
@@ -288,7 +313,7 @@ class Scheduler:
                 self.store.update_once(run.id, status=FAILED, error=str(e))
                 log.warning("当日のみの予約（%s）を開始できませんでした: %s", run.time, e)
                 continue
-            job = self._start(repo, out, tasks, run.git_pull, ONCE)
+            job = self._start(repo, out, tasks, run.git_pull, ONCE, concurrency=run.concurrency)
             if job is None:
                 continue  # 同じ出力先で実行中。終わってから実行する
             self.store.update_once(run.id, status=STARTED, run_id=job.run_id, started_at=job.started_at)
@@ -306,14 +331,17 @@ class Scheduler:
             raise ValueError("選んだタスクのスキルが登録されていません")
         return repo, out, tasks
 
-    def _start(self, repo: Path, out: Path, tasks: list[str], git_pull: bool, trigger: str = SCHEDULED) -> Job | None:
+    def _start(
+        self, repo: Path, out: Path, tasks: list[str], git_pull: bool, trigger: str = SCHEDULED,
+        *, concurrency: int = DEFAULT_SCHEDULE_CONCURRENCY,
+    ) -> Job | None:
         # 同じ出力先で手動の実行・コマンドからの実行が動いていれば、終わってから実行する
         # （別の出力先の実行とは同時に動く。セッション数はサーバー全体で抑えられる）
         same_out = self.jobs.job_for(out)
         if (same_out is not None and same_out.running) or is_locked(out):
             return None
         try:
-            return self.jobs.start(repo, out, tasks, 0, False, git_pull=git_pull, trigger=trigger)
+            return self.jobs.start(repo, out, tasks, 0, False, git_pull=git_pull, trigger=trigger, concurrency=concurrency)
         except JobBusy:
             return None
 

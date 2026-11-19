@@ -218,7 +218,7 @@ python -m godoc_agent.runner --repo /srv/repos/myapp --out ./out --tasks doc,tes
 ```
 
 - `--limit` はファイル×タスクの件数で数える（両方のタスクを実行する場合、`--limit 5` は約2.5ファイル分）
-- 並列数（`--concurrency`。1〜10、既定 10）はタスクをまたいだ合計。両方のタスクを実行すると Claude Code の実行回数はおよそ2倍になる
+- 並列数（`--concurrency`。1〜10、既定 10。Web 画面の初期値・定期実行・当日のみの予約の既定は 1）はタスクをまたいだ合計。両方のタスクを実行すると Claude Code の実行回数はおよそ2倍になる
 - さらに、サーバー全体（Web 画面の複数人の実行・定期実行・コマンドの合計）でも同時に 10 セッションまでに抑える。空きがなければ空くまで待つ
 - 入力がコンテキスト（`LLM_NUM_CTX` = vLLM の `--max-model-len`、256K）を超えるファイルは、失敗にせず**警告付きでスキップ**して次のファイルへ進む（計測ログの `status` が `too_large` / `context_overflow`、`warnings` に理由）
 
