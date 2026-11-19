@@ -29,7 +29,7 @@ from ..skill_registry import OUTPUT_TYPE_LABELS, OUTPUT_TYPES
 from .auth import LoginThrottle, SessionStore, validate_password_hash, verify_password
 from .git_repo import GitRepoError, inspect_repo
 from .jobs import JobBusy, JobManager
-from .schedule import Scheduler, ScheduleStore
+from .schedule import DEFAULT_SCHEDULE_CONCURRENCY, Scheduler, ScheduleStore
 from .settings import APP_DIR, WebSettings
 from .skills import SkillFile, SkillStore
 from .targets_editor import TargetsEditor
@@ -72,12 +72,15 @@ class ScheduleRequest(BaseModel):
     time: str = Field(min_length=5, max_length=5)
     tasks: list[str] = Field(min_length=1, max_length=MAX_TASKS)
     git_pull: bool = True
+    # 同時セッション数。指定しなければ 1（runner の既定値 10 にはしない）
+    concurrency: int = Field(default=DEFAULT_SCHEDULE_CONCURRENCY, ge=1, le=MAX_CONCURRENCY)
 
 
 class OnceRequest(BaseModel):
     time: str = Field(min_length=5, max_length=5)
     tasks: list[str] = Field(min_length=1, max_length=MAX_TASKS)
     git_pull: bool = True
+    concurrency: int = Field(default=DEFAULT_SCHEDULE_CONCURRENCY, ge=1, le=MAX_CONCURRENCY)
 
 
 class WorkspaceRequest(BaseModel):
@@ -406,11 +409,12 @@ def create_app(
             "time": schedule.time,
             "tasks": schedule.tasks,
             "git_pull": schedule.git_pull,
+            "concurrency": schedule.concurrency,
             "repo": schedule.repo,
             "out": schedule.out,
             "next_run_at": next_run.isoformat(timespec="minutes") if next_run else None,
             "last_run": schedule.last_run,
-            # 当日のみの予約（今日の分と、前日に実行されなかった分）。時刻順
+            # 当日のみの予約（今日・翌日の分と、前日に実行されなかった分）。日時順
             "once": sorted(
                 (asdict(r) for r in schedule_store.once_runs(schedule)), key=lambda r: (r["date"], r["time"], r["created_at"]),
             ),
@@ -431,6 +435,7 @@ def create_app(
         try:
             schedule_store.save_settings(
                 body.enabled, body.time, tasks, body.git_pull, clock(), repo=ws.repo, out=ws.out,
+                concurrency=body.concurrency,
             )
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
@@ -438,13 +443,16 @@ def create_app(
 
     @app.post("/api/schedule/once", status_code=201, dependencies=[Depends(require_admin)])
     def add_once(body: OnceRequest, request: Request) -> dict:
-        """今日の指定した時刻に1回だけ実行する予約。予約したブラウザでいま選んでいるフォルダで動かす。"""
+        """今から24時間以内の指定した時刻に1回だけ実行する予約（今日の時刻を過ぎていれば翌日）。
+        予約したブラウザでいま選んでいるフォルダで動かす。"""
         tasks = check_tasks(body.tasks)
         ws = current_workspace(request)
         if body.git_pull and ws.repo:
             check_pullable(Path(ws.repo))
         try:
-            schedule_store.add_once(body.time, tasks, body.git_pull, clock(), repo=ws.repo, out=ws.out)
+            schedule_store.add_once(
+                body.time, tasks, body.git_pull, clock(), repo=ws.repo, out=ws.out, concurrency=body.concurrency,
+            )
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         return schedule_view()

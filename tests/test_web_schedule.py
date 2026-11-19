@@ -191,6 +191,22 @@ def test_tasks_without_registered_skill_are_skipped(sched_client, jobs, clock):
     assert job.tasks == ["doc"]
 
 
+def test_daily_schedule_uses_one_session_unless_chosen(sched_client, jobs, clock):
+    save_schedule(sched_client)
+    assert sched_client.get("/api/schedule").json()["concurrency"] == 1
+    clock.now = datetime(2026, 11, 8, 2, 0)
+    job = scheduler(sched_client).tick()
+    assert job.concurrency == 1
+    wait_finished(jobs)
+    assert "--concurrency 1" in log_text(sched_client, job.run_id)
+
+    assert save_schedule(sched_client, time="03:00", concurrency=3).status_code == 200
+    assert save_schedule(sched_client, concurrency=0).status_code == 422
+    clock.now = datetime(2026, 11, 8, 3, 0)
+    job = scheduler(sched_client).tick()
+    assert job.concurrency == 3
+
+
 def test_disabled_schedule_does_not_run(sched_client, clock):
     save_schedule(sched_client, enabled=False)
     clock.now = datetime(2026, 11, 8, 2, 0)
@@ -390,14 +406,62 @@ def test_once_does_not_change_the_daily_schedule(sched_client, clock):
     assert scheduler(sched_client).tick() is not None
 
 
-def test_once_in_the_past_is_rejected(sched_client, clock):
+def test_once_past_time_today_runs_tomorrow_within_24_hours(sched_client, clock):
     clock.now = datetime(2026, 11, 8, 10, 30)
-    res = add_once(sched_client, time="10:00")
-    assert res.status_code == 400
-    assert "過ぎて" in res.json()["detail"]
-    # 今の分（10:30）は受け付けて、次の確認ですぐ実行する
+    # 今日の 10:00 は過ぎているので、翌日の 10:00 に実行する
+    assert add_once(sched_client, time="10:00").status_code == 201
+    [run] = once_list(sched_client)
+    assert (run["date"], run["time"], run["status"]) == ("2026-11-09", "10:00", "pending")
+    sch = scheduler(sched_client)
+    clock.now = datetime(2026, 11, 8, 23, 59)
+    assert sch.tick() is None
+    clock.now = datetime(2026, 11, 9, 9, 59)
+    assert sch.tick() is None
+    assert once_list(sched_client)[0]["status"] == "pending"  # 日を越えても翌日分は「実行されず」にしない
+    clock.now = datetime(2026, 11, 9, 10, 0)
+    assert sch.tick() is not None
+    assert once_list(sched_client)[0]["status"] == "started"
+
+
+def test_once_now_runs_today_immediately(sched_client, clock):
+    clock.now = datetime(2026, 11, 8, 10, 30)
+    # 今の分（10:30）は今日の分として受け付けて、次の確認ですぐ実行する
     assert add_once(sched_client, time="10:30").status_code == 201
+    assert once_list(sched_client)[0]["date"] == "2026-11-08"
     assert scheduler(sched_client).tick() is not None
+
+
+def test_once_uses_one_session_by_default(sched_client, jobs, clock):
+    add_once(sched_client)
+    assert once_list(sched_client)[0]["concurrency"] == 1
+    clock.now = datetime(2026, 11, 8, 3, 0)
+    job = scheduler(sched_client).tick()
+    assert job.concurrency == 1
+    wait_finished(jobs)
+    assert "--concurrency 1" in log_text(sched_client, job.run_id)
+
+
+def test_once_concurrency_can_be_chosen(sched_client, jobs, clock):
+    assert add_once(sched_client, concurrency=4).status_code == 201
+    assert add_once(sched_client, time="04:00", concurrency=11).status_code == 422
+    clock.now = datetime(2026, 11, 8, 3, 0)
+    job = scheduler(sched_client).tick()
+    assert job.concurrency == 4
+    wait_finished(jobs)
+    assert "--concurrency 4" in log_text(sched_client, job.run_id)
+
+
+def test_once_saved_by_older_version_uses_one_session(sched_client, jobs, clock):
+    import json
+
+    add_once(sched_client)
+    store = sched_client.app.state.scheduler.store
+    data = json.loads(store.path.read_text(encoding="utf-8"))
+    del data["once"][0]["concurrency"]  # 以前の版で保存した予約には同時セッションの記録がない
+    store.path.write_text(json.dumps(data), encoding="utf-8")
+    clock.now = datetime(2026, 11, 8, 3, 0)
+    job = scheduler(sched_client).tick()
+    assert job.concurrency == 1
 
 
 @pytest.mark.parametrize("body", [{"time": "25:00"}, {"tasks": []}, {"tasks": ["unknown"]}])

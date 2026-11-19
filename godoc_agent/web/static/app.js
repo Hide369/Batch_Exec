@@ -17,6 +17,7 @@ const state = {
   logOffset: 0,
   sessionSlot: null, // セッションログを表示中の枠の番号（null は非表示）
   server: null, // サーバー全体のセッションの使用状況（/api/status の server）
+  onceIds: [], // 表示中の当日のみの予約の id（追加した予約を見分ける）
   skillsInUse: [], // 実行中の処理が使っているスキル名（入れ替え・削除はできない）
   following: true,  // 実行中のジョブのログを追いかけるか（履歴を選ぶと止める）
   outputs: [],
@@ -401,6 +402,7 @@ async function loadSchedule() {
   $("schedule-enabled").checked = schedule.enabled;
   $("schedule-time").value = schedule.time;
   $("schedule-git-pull").checked = schedule.git_pull;
+  $("schedule-concurrency").value = String(schedule.concurrency ?? 1);
   // 保存済みの選択に、その後登録を外したスキルがあれば「未登録」として見せる（実行時には除かれる）
   const missing = schedule.tasks.filter((n) => !state.taskOptions.some((t) => t.name === n))
     .map((name) => ({ name, label: name, type: "", missing: true }));
@@ -433,7 +435,18 @@ const ONCE_STATUS = {
   missed: ["実行されず", "warn"],
 };
 
+// 予約の日付を「今日」「明日」で表す（それ以外の日は日付のまま）
+function onceDay(dateStr) {
+  const d = new Date();
+  const iso = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+  if (dateStr === iso(d)) return "今日";
+  d.setDate(d.getDate() + 1);
+  if (dateStr === iso(d)) return "明日";
+  return dateStr;
+}
+
 function renderOnce(runs) {
+  state.onceIds = runs.map((r) => r.id);
   const pending = runs.filter((r) => r.status === "pending").length;
   $("once-badge").replaceChildren(pending ? badge(`予約 ${pending} 件`, "ok") : badge("予約なし", "idle"));
   $("once-table").classList.toggle("hidden", runs.length === 0);
@@ -445,9 +458,10 @@ function renderOnce(runs) {
       : "";
     if (cancel) cancel.dataset.admin = "";
     return el("tr", {},
-      el("td", { className: "mono", textContent: r.status === "missed" ? `${r.date} ${r.time}` : r.time }),
+      el("td", { className: "mono", textContent: `${onceDay(r.date)} ${r.time}` }),
       el("td", {}, badge(label, cls), el("span", { className: "muted small", textContent: detail })),
       el("td", { textContent: r.tasks.map(taskLabel).join("・") }),
+      el("td", { className: "mono", textContent: String(r.concurrency ?? 1) }),
       el("td", { className: "mono small", textContent: r.out ?? "" }),
       el("td", {}, cancel));
   }));
@@ -455,11 +469,11 @@ function renderOnce(runs) {
 }
 
 async function cancelOnce(run) {
-  if (!confirm(`${run.time} の予約を取り消しますか？`)) return;
+  if (!confirm(`${onceDay(run.date)} ${run.time} の予約を取り消しますか？`)) return;
   $("once-msg").textContent = "";
   try {
     renderScheduleInfo(await send("DELETE", `/api/schedule/once/${encodeURIComponent(run.id)}`));
-    message("once-msg", `${run.time} の予約を取り消しました`, true);
+    message("once-msg", `${onceDay(run.date)} ${run.time} の予約を取り消しました`, true);
   } catch (err) {
     message("once-msg", err.message);
   }
@@ -474,9 +488,13 @@ $("once-form").addEventListener("submit", async (e) => {
     return;
   }
   const time = $("once-time").value;
+  const concurrency = Number($("once-concurrency").value) || 1;
   try {
-    renderScheduleInfo(await send("POST", "/api/schedule/once", { time, tasks, git_pull: $("once-git-pull").checked }));
-    message("once-msg", `今日の ${time} に実行するよう予約しました`, true);
+    const before = new Set(state.onceIds ?? []);
+    const schedule = await send("POST", "/api/schedule/once", { time, tasks, git_pull: $("once-git-pull").checked, concurrency });
+    renderScheduleInfo(schedule);
+    const added = (schedule.once ?? []).find((r) => !before.has(r.id) && r.time === time && r.status === "pending");
+    message("once-msg", `${added ? `${onceDay(added.date)}の ` : ""}${time} に実行するよう予約しました（同時 ${concurrency} セッション）`, true);
   } catch (err) {
     message("once-msg", err.message);
   }
@@ -493,6 +511,7 @@ $("schedule-form").addEventListener("submit", async (e) => {
   try {
     const schedule = await send("PUT", "/api/schedule", {
       enabled: $("schedule-enabled").checked, time: $("schedule-time").value, tasks, git_pull: $("schedule-git-pull").checked,
+      concurrency: Number($("schedule-concurrency").value) || 1,
     });
     renderScheduleInfo(schedule);
     message("schedule-msg", schedule.enabled ? `保存しました（次回 ${fmtTime(schedule.next_run_at)}）` : "保存しました（定期実行は無効）", true);

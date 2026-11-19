@@ -182,6 +182,11 @@
         <label><input id="schedule-git-pull" type="checkbox" data-admin> 実行前に対象フォルダを git pull する（失敗したら生成しない）</label>
       </div>
       <div class="row">
+        <span class="label">同時セッション</span>
+        <input id="schedule-concurrency" type="number" min="1" max="10" step="1" value="1" required data-admin>
+        <span class="muted small">1〜10。既定は 1（サーバー全体でも合計10まで）</span>
+      </div>
+      <div class="row">
         <span class="label"></span>
         <button id="schedule-save" class="primary" type="submit" data-admin>保存</button>
         <span id="schedule-info" class="muted small"></span>
@@ -191,8 +196,8 @@
 
     <h3 style="margin-bottom:4px">当日のみ <span id="once-badge"></span></h3>
     <p class="muted small" style="margin-top:0">
-      今日の指定した時刻に1回だけ、上のフォルダで実行します（毎日の定期実行とは別。複数予約でき、実行前なら取り消せます）。
-      別の実行が動いていれば終わってから実行します。今日のうちに実行できなかった予約は実行しません。
+      今から24時間以内の指定した時刻に1回だけ、上のフォルダで実行します（今日の時刻を過ぎていれば翌日のその時刻。毎日の定期実行とは別。複数予約でき、実行前なら取り消せます）。
+      別の実行が動いていれば終わってから実行します。予約した日のうちに実行できなかった予約は実行しません。
     </p>
     <form id="once-form">
       <div class="row">
@@ -205,13 +210,18 @@
         <label><input id="once-git-pull" type="checkbox" checked data-admin> 実行前に対象フォルダを git pull する（失敗したら生成しない）</label>
       </div>
       <div class="row">
+        <span class="label">同時セッション</span>
+        <input id="once-concurrency" type="number" min="1" max="10" step="1" value="1" required data-admin>
+        <span class="muted small">1〜10。既定は 1（サーバー全体でも合計10まで）</span>
+      </div>
+      <div class="row">
         <span class="label"></span>
-        <button id="once-add" class="primary" type="submit" data-admin>今日だけ予約</button>
+        <button id="once-add" class="primary" type="submit" data-admin>1回だけ予約</button>
       </div>
       <div id="once-msg"></div>
     </form>
     <table id="once-table" class="hidden">
-      <thead><tr><th>時刻</th><th>状態</th><th>スキル</th><th>出力先</th><th></th></tr></thead>
+      <thead><tr><th>日時</th><th>状態</th><th>スキル</th><th>同時</th><th>出力先</th><th></th></tr></thead>
       <tbody id="once-list"></tbody>
     </table>
   </section>
