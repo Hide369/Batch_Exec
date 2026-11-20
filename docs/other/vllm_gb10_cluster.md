@@ -7,8 +7,8 @@ GB10（DGX Spark）4台を200GbEのQSFPスイッチで繋ぎ、1台に載らな�
 
 > **この文書の位置づけ（2026-11-07）**
 > 1台でのvLLMの立て方は [Ollama を止めて vLLM に切り替える](../pr33-38/vllm_migration.md)
-> （local-llm-rag の [GB10サーバーにvLLMを立てる](https://github.com/Hide369/local-llm-rag/blob/master/docs/vllm/vllm-gb10.md) も参照）、メモリが
-> 足りないときの切り分けは local-llm-rag の [GB10のvLLMでメモリが枯渇したときの対処](https://github.com/Hide369/local-llm-rag/blob/master/docs/vllm/vllm-gb10-memory.md)
+> （[GB10サーバーにvLLMを立てる](vllm/vllm-gb10.md) も参照）、メモリが
+> 足りないときの切り分けは [GB10のvLLMでメモリが枯渇したときの対処](vllm/vllm-gb10-memory.md)
 > にある。ここは**4台構成で増える部分**だけを書く。
 >
 > **トークンは使わない。** Hugging Face にはログインできない前提で、`HF_TOKEN` も
@@ -45,7 +45,7 @@ GB10（DGX Spark）4台を200GbEのQSFPスイッチで繋ぎ、1台に載らな�
 **1. 4台で512GBの1つの塊になるわけではない。** 各台が重みの1/4とKVキャッシュを
 自分の128GBに持つ。`--gpu-memory-utilization` は**各台ごと**の割合である。
 1台のOSやOllamaがメモリを食っていると、その1台が足を引っ張って全体が起動しない。
-4台すべてで [メモリ枯渇の対処](https://github.com/Hide369/local-llm-rag/blob/master/docs/vllm/vllm-gb10-memory.md) の1・2節（競合プロセスの停止と
+4台すべてで [メモリ枯渇の対処](vllm/vllm-gb10-memory.md) の1・2節（競合プロセスの停止と
 キャッシュ解放）を行ってから起動する。
 
 **2. GB10は1台にGPUが1つなので、分割の仕方は2つある。**
@@ -308,7 +308,7 @@ done
 - `401` や `gated` で失敗するモデル（利用申請が要るモデル）は、トークンが無いと
   取れないので使わない。申請の要らない公開モデルを選ぶ
 
-モデルの選び方は local-llm-rag の [vllm-gb10-models.md](https://github.com/Hide369/local-llm-rag/blob/master/docs/vllm/vllm-gb10-models.md) と同じ考え方
+モデルの選び方は [vllm-gb10-models.md](vllm/vllm-gb10-models.md) と同じ考え方
 （MoE が有利、量子化済みのチェックポイントを選ぶ）を使う。NVIDIAの4台の例は
 `MiniMaxAI/MiniMax-M2.5` をテンソル並列4で動かしている。**そのモデルのレシピに
 書かれたイメージ・フラグ・環境変数は一揃いで使う**こと（NVIDIAも混ぜないよう
@@ -338,7 +338,7 @@ export HF_CACHE_DIR="$HOME/.cache/huggingface"
 
 ### 7-2. 各台でメモリを空ける
 
-4台すべてで、[メモリ枯渇の対処](https://github.com/Hide369/local-llm-rag/blob/master/docs/vllm/vllm-gb10-memory.md) の1・2節を行う。
+4台すべてで、[メモリ枯渇の対処](vllm/vllm-gb10-memory.md) の1・2節を行う。
 
 ```bash
 sudo systemctl stop ollama
@@ -413,7 +413,7 @@ vllm serve <モデルのHFハンドル> \
 
 使うモデルのレシピに、パーサー（`--tool-call-parser` など）、量子化、`--trust-remote-code`
 などの指定があれば、4台すべてのコマンドに同じものを足す。コーディングエージェントから
-使うなら、道具呼び出しのフラグは必須である（local-llm-rag の [vllm-gb10-coding-agent.md](https://github.com/Hide369/local-llm-rag/blob/master/docs/vllm/vllm-gb10-coding-agent.md)。Qwen3-Coder-Next なら
+使うなら、道具呼び出しのフラグは必須である（[vllm-gb10-coding-agent.md](vllm/vllm-gb10-coding-agent.md)。Qwen3-Coder-Next なら
 `--enable-auto-tool-choice --tool-call-parser qwen3_coder`。[vllm_migration.md](../pr33-38/vllm_migration.md) と同じ）。
 
 ## 8. 動作を確かめる
@@ -443,7 +443,7 @@ curl http://127.0.0.1:8000/v1/chat/completions \
 
 社内LANのクライアントからは、`127.0.0.1` を node-1 の管理用IPに替えて叩く。
 LiteLLM Proxy の背後に置く場合は、node-1 の `http://<管理IP>:8000/v1` を
-バックエンドとして登録する（LiteLLMの構成は local-llm-rag の [docs/proxy/](https://github.com/Hide369/local-llm-rag/tree/master/docs/proxy) の手順書を参照）。
+バックエンドとして登録する（LiteLLMの構成は [docs/other/proxy/](proxy/) の手順書を参照）。
 
 ## 9. 止める・起動し直す
 
@@ -529,7 +529,7 @@ docker exec -it $VLLM_CONTAINER /bin/bash -c '
 ```
 
 メモリまわりのフラグは7節とそろえてある。`--gpu-memory-utilization` を省くと既定の
-0.9が各台に掛かり、OSの分が残らない（[メモリ枯渇の対処](https://github.com/Hide369/local-llm-rag/blob/master/docs/vllm/vllm-gb10-memory.md)）。
+0.9が各台に掛かり、OSの分が残らない（[メモリ枯渇の対処](vllm/vllm-gb10-memory.md)）。
 7節と比べるための代替なので、条件を変えないこと。
 
 Rayのダッシュボード（`http://<ヘッドのIP>:8265`）は認証が無いので、社内LANの外へ
@@ -561,7 +561,7 @@ Rayのダッシュボード（`http://<ヘッドのIP>:8265`）は認証が無�
 - [vLLM — Parallelism and Scaling（マルチノード）](https://docs.vllm.ai/en/latest/serving/parallelism_scaling/)（テンソル並列とパイプライン並列の選び方、`--nnodes` / `--headless`、Ray、`NET/IB` の確認）
 - [NVIDIA NGC — vLLM コンテナのタグ一覧](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/vllm/tags)（この文書は既存の `26.10-py3` を使う）
 - 本リポジトリ内: [vllm_migration.md](../pr33-38/vllm_migration.md)（1台での vLLM への切り替え。同じイメージタグ）
-- local-llm-rag リポジトリ（この文書の移動元）: [vllm-gb10.md](https://github.com/Hide369/local-llm-rag/blob/master/docs/vllm/vllm-gb10.md)（1台での立て方）、
-  [vllm-gb10-memory.md](https://github.com/Hide369/local-llm-rag/blob/master/docs/vllm/vllm-gb10-memory.md)（メモリ枯渇の対処）、
-  [vllm-gb10-models.md](https://github.com/Hide369/local-llm-rag/blob/master/docs/vllm/vllm-gb10-models.md)（モデルの選び方）、
-  [vllm-gb10-coding-agent.md](https://github.com/Hide369/local-llm-rag/blob/master/docs/vllm/vllm-gb10-coding-agent.md)（コーディングエージェント向けのフラグ）
+- 同じリポジトリの [docs/other/vllm/](vllm/)（local-llm-rag から移した）: [vllm-gb10.md](vllm/vllm-gb10.md)（1台での立て方）、
+  [vllm-gb10-memory.md](vllm/vllm-gb10-memory.md)（メモリ枯渇の対処）、
+  [vllm-gb10-models.md](vllm/vllm-gb10-models.md)（モデルの選び方）、
+  [vllm-gb10-coding-agent.md](vllm/vllm-gb10-coding-agent.md)（コーディングエージェント向けのフラグ）

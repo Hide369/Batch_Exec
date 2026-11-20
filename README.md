@@ -58,6 +58,7 @@ generate の中身（ファイルごと）:
 処理対象の言語・フォルダ・ファイル・除外を変える手順は [docs/other/target_files.md](docs/other/target_files.md) にまとめている。
 処理が遅いときの切り分け（原因の候補・計測ログの集計方法・関係する設定）は [docs/other/performance_troubleshooting.md](docs/other/performance_troubleshooting.md) にまとめている。
 対象フォルダをネットワーク上の NAS にする手順（マウント・サービスの設定・git pull・元に戻す方法）は [docs/other/nas_target.md](docs/other/nas_target.md) にまとめている。
+GB10（1台）に vLLM を立てる手順（コンテナ・systemd・公開と認証、トークンを使わない・イメージタグは `26.10-py3`・外部向けポートは 11434／コンテナの中は 8000）は [docs/other/vllm/vllm-gb10.md](docs/other/vllm/vllm-gb10.md) にまとめている。gpt-oss-120b で Codex と Claude Code を使う手順・メモリ枯渇の対処・モデルの選定は同じフォルダにある。
 1台に載らないモデルを、GB10 を4台スイッチで繋いだ vLLM クラスタで動かす手順（トークンを使わない・イメージタグは `26.10-py3`）は [docs/other/vllm_gb10_cluster.md](docs/other/vllm_gb10_cluster.md) にまとめている。
 GB10 を2台並べ、LiteLLM を前に置いて Claude Code から Qwen3-Coder-Next（GB10-A）と gpt-oss-120b（GB10-B）を切り替える手順（トークンを使わない・外部向けポートは 11434、推論エンジンは 8000）は [docs/other/proxy/gb10-dual-llm-setup.md](docs/other/proxy/gb10-dual-llm-setup.md)（vLLM 版）と [docs/other/proxy/gb10-dual-sglang-setup.md](docs/other/proxy/gb10-dual-sglang-setup.md)（SGLang 版）にまとめている。
 サーバーの更新手順書は、作成日（PR のマージ日）ごとに `docs/pr<最初のPR番号>-<最後のPR番号>/` にまとめている（その日のPRが1件なら `docs/pr<番号>/`）。それ以外の仕様・使い方の文書は `docs/other/` に置く。
