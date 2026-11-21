@@ -77,8 +77,8 @@ GB10 の GUI テキストエディタだけ日本語を入力できないとき�
 
 ```bash
 # 1. 推論サーバー（vLLM）を起動する（手順は docs/pr33-38/vllm_migration.md）
-#    --served-model-name claude-opus-4-6 --max-model-len 262144 --port 11434 で起動しておく
-#    （Ollama から移行したサーバーでは、Ollama と同じ 11434 番ポートで vLLM を待ち受ける）
+#    NVIDIA の vLLM コンテナを --served-model-name claude-opus-4-6 --max-model-len 262144 で、-p 11434:8000 を付けて起動しておく
+#    （Ollama から移行したサーバーでは、Ollama と同じ 11434 番ポートで vLLM を待ち受ける。起動コマンドは手順書の手順1.5）
 curl http://127.0.0.1:11434/v1/models   # claude-opus-4-6 が出ること
 
 # 2. Claude Code をインストール
@@ -286,7 +286,7 @@ Pythonファイルを置くだけでは動かない。最初に1回だけ、次�
 注意:
 
 - **sudo が必要な作業は GB10 の端末で行う**。Web 画面からはできない
-- 停電などでサーバーが停止した後の電源投入は、物理的な操作（またはリモート電源管理）が必要。起動すれば vLLM（systemd 化した場合）と Web 画面は自動で立ち上がり、定期実行も逃した分を起動後に実行する
+- 停電などでサーバーが停止した後の電源投入は、物理的な操作（またはリモート電源管理）が必要。起動すれば vLLM（`--restart unless-stopped` 付きのコンテナ）と Web 画面は自動で立ち上がり、定期実行も逃した分を起動後に実行する
 
 ### 1. Goリポジトリをサーバーに置く
 

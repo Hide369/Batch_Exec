@@ -59,6 +59,16 @@ Windows（VS Code）
 アクセスしないためである。確認の3つ（`--check` / `--configure-context` / `--probe`）は
 `/api/tags` や `/api/create` を叩くので vLLM では動かない。**代わりに curl で確かめる。**
 
+> **このリポジトリのサーバーで稼働中の vLLM（2026-11-21）**
+> 移行先の GB10 では、[vllm_migration.md の手順1.5](../../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する) の
+> コマンドで vLLM がコンテナ名 `vllm` として常駐している（Qwen3-Coder-Next、`--served-model-name claude-opus-4-6`、
+> `-p 11434:8000`、`--restart unless-stopped`）。この文書の起動例を同じ GB10 で試すときは、先に
+> `docker update --restart no vllm && docker stop vllm` で止める。止めないと 11434 番とメモリを取り合い、
+> OS を再起動するたびに `vllm` が先に立ち上がる。戻すときは `docker update --restart unless-stopped vllm && docker start vllm`。
+>
+> 1台構成で安定稼働を確認した指定のうち、`--ulimit memlock=-1 --ulimit stack=67108864` と `--enforce-eager` は
+> この文書の起動例に入っていない。起動例が起動直後やCUDAグラフの取得中に落ちるときは、まずこれらを足して試す。
+
 ## 目次
 
 - [1. GB10: vLLMを立てる](#1-gb10-vllmを立てる)

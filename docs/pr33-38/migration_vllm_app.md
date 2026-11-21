@@ -35,7 +35,7 @@ curl -s http://127.0.0.1:11434/v1/messages \
 | 結果 | 対応 |
 |---|---|
 | どちらも JSON が返る | 次へ進む |
-| `Connection refused` | vLLM が止まっている。[vllm_migration.md](vllm_migration.md) の手順3で起動する |
+| `Connection refused` | vLLM が止まっている、または起動途中。`docker ps -a` で確かめ、止まっていれば [vllm_migration.md](vllm_migration.md) の手順1.5のコマンドで起動する |
 | `/v1/models` に別の名前しか出ない | vLLM を `--served-model-name claude-opus-4-6` で起動し直す（または後の `.env` の `LLM_MODEL` を出ている名前に合わせる） |
 | `/v1/messages` だけ `404` | vLLM が古く Anthropic 互換API がない。イメージが `26.10-py3` になっているか確かめ、そのイメージで起動し直す |
 
@@ -88,7 +88,7 @@ nano /opt/Batch_Exec/.env
 次の3つを、vLLM の起動オプションと同じ値にする。`OLLAMA_BASE_URL`・`LLM_CONCURRENCY` の行は消す（どちらももう読まない）。
 
 ```bash
-LLM_BASE_URL=http://127.0.0.1:11434  # vLLM の --port（Ollama と同じ 11434）
+LLM_BASE_URL=http://127.0.0.1:11434  # vLLM コンテナの -p 11434:8000 のホスト側（Ollama と同じ 11434）
 LLM_MODEL=claude-opus-4-6          # vLLM の --served-model-name
 LLM_NUM_CTX=262144                   # vLLM の --max-model-len
 ```

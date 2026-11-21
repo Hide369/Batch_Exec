@@ -51,6 +51,7 @@ vLLM で載せ、LiteLLM で束ねて VS Code の Claude Code からモデルを
 - 両機が同一LANにあり、固定IPを割り当て済み
 - クライアントPC：VS Code + Claude Code 拡張（**v2.1.129 以降推奨**、後述のモデル自動検出を使う場合）
 - 両機で Ollama が 11434 番を使っている場合は、先に止めておく（[vllm_migration.md](../../pr33-38/vllm_migration.md) の Ollama 停止の手順）
+- 1台構成の vLLM（[vllm_migration.md](../../pr33-38/vllm_migration.md) の手順1.5で作ったコンテナ `vllm`）が動いている機械は、先に止めておく（4章の注意）
 
 ### vLLM のイメージ（トークンは使わない）
 
@@ -125,55 +126,86 @@ mkdir -p ~/.cache/huggingface
 ## 4. GB10-A：Qwen3-Coder-Next の起動
 
 Qwen3-Coder-Next は 80B（MoE）。BF16 だと約160GBで GB10 の128GBに載らないため、**FP8 版**を使う。
-LiteLLM も同じ機械で動かすため、`--gpu-memory-utilization` は少し低めにする。
+
+起動コマンドは、1台構成の GB10 で安定稼働を確認したもの（[vllm_migration.md の手順1.5](../../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する)）に揃える。
+変えるのは、LiteLLM と同じ機械に置くための3か所（コンテナ名・公開ポート・`--served-model-name`）だけである。
 
 ```bash
-docker run -d --name vllm-qwen --restart unless-stopped \
-  --gpus all --ipc=host \
+docker run -d \
+  --name vllm-qwen \
+  --gpus all \
+  --ipc=host \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
   -p 127.0.0.1:8000:8000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --restart unless-stopped \
   nvcr.io/nvidia/vllm:26.10-py3 \
-  vllm serve Qwen/Qwen3-Coder-Next-FP8 \
-    --served-model-name qwen3-coder-next \
-    --host 0.0.0.0 --port 8000 \
-    --enable-auto-tool-choice \
-    --tool-call-parser qwen3_coder \
-    --enable-prefix-caching \
-    --max-model-len 131072 \
-    --gpu-memory-utilization 0.80
+  python3 -m vllm.entrypoints.openai.api_server \
+  --model Qwen/Qwen3-Coder-Next-FP8 \
+  --served-model-name qwen3-coder-next \
+  --enforce-eager \
+  --gpu-memory-utilization 0.8 \
+  --max-model-len 262144 \
+  --kv-cache-dtype fp8 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder \
+  --enable-prefix-caching
 ```
 
+| 1台構成（vllm_migration.md）との違い | 1台構成 | GB10-A | 理由 |
+|---|---|---|---|
+| コンテナ名 | `vllm` | `vllm-qwen` | 2台のどちらのコンテナか見分けるため |
+| 公開ポート | `-p 11434:8000` | `-p 127.0.0.1:8000:8000` | 11434 番は LiteLLM が使う。vLLM はループバックだけに出す |
+| `--served-model-name` | `claude-opus-4-6` | `qwen3-coder-next` | Claude 名（`claude-opus-4-6`）への付け替えは LiteLLM の `model_name`（7.2）で行う |
+
 **注意**
+- **1台構成から組み替える場合は、先に既存の `vllm` コンテナを止める。** `--restart unless-stopped` 付きのため、
+  止めないと 11434 番を握ったまま再起動のたびに立ち上がり、LiteLLM が起動できず、メモリも取り合う。
+  `docker update --restart no vllm && docker stop vllm`（使わないなら `docker rm -f vllm`）。
 - `-p 127.0.0.1:8000:8000` で、ホストのループバックだけに公開する（LAN からは届かない）。
-  コンテナの中は `--host 0.0.0.0` にしないとホストから届かない。
+  コンテナの中の API サーバーは既定で全アドレスの 8000 番で待ち受けるので、`--host`・`--port` は書かなくてよい。
+- `--ipc=host`・`--ulimit`・`--enforce-eager` の意味は [vllm_migration.md の手順1.5](../../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する) の表を参照。
 - `-e HF_TOKEN` は付けない（2章）。
 - 公式サンプルの `--tensor-parallel-size 2` は**付けない**（1台構成のため）。
-- GB10 は CPU と GPU がメモリを共有するため、LiteLLM や OS の分を残して `--gpu-memory-utilization` はやや控えめにする。
-- メモリ不足で起動しない場合は `--max-model-len` を 65536 に下げるか、4bit 量子化版に切り替える。
+- LiteLLM（Python のプロセス1つ）は数百MB程度なので、1台構成と同じ `--gpu-memory-utilization 0.8` のまま載る。
+  メモリ不足で起動しない場合は `--max-model-len` を 131072 → 65536 の順に下げる（LiteLLM と Claude Code の設定は変えなくてよい）。
 - ログは `docker logs -f vllm-qwen`。`Application startup complete` が出たら起動完了。
 
 ---
 
 ## 5. GB10-B：gpt-oss-120b の起動
 
+`docker run` のオプションと `--enforce-eager`・`--enable-prefix-caching` は GB10-A（＝1台構成で稼働中のコマンド）と同じにし、
+モデル固有の引数だけを gpt-oss-120b 用にする。
+
 ```bash
-docker run -d --name vllm-gptoss --restart unless-stopped \
-  --gpus all --ipc=host \
+docker run -d \
+  --name vllm-gptoss \
+  --gpus all \
+  --ipc=host \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
   -p 11434:8000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --restart unless-stopped \
   nvcr.io/nvidia/vllm:26.10-py3 \
-  vllm serve openai/gpt-oss-120b \
-    --served-model-name gpt-oss-120b \
-    --host 0.0.0.0 --port 8000 \
-    --enable-auto-tool-choice \
-    --tool-call-parser openai \
-    --reasoning-parser openai_gptoss \
-    --enable-prefix-caching \
-    --max-model-len 131072 \
-    --gpu-memory-utilization 0.85
+  python3 -m vllm.entrypoints.openai.api_server \
+  --model openai/gpt-oss-120b \
+  --served-model-name gpt-oss-120b \
+  --enforce-eager \
+  --gpu-memory-utilization 0.85 \
+  --max-model-len 131072 \
+  --enable-auto-tool-choice \
+  --tool-call-parser openai \
+  --reasoning-parser openai_gptoss \
+  --enable-prefix-caching
 ```
 
 **注意**
+- GB10-B を1台構成から組み替える場合も、先に既存の `vllm` コンテナを止める（4章の注意と同じ。11434 番がぶつかる）。
+- この起動コマンドは GB10-B では実測していない。GB10-A と違って `--kv-cache-dtype fp8` は付けない（gpt-oss-120b は KV キャッシュが小さい。[vllm_migration.md の gpt-oss-120b の表](../../pr33-38/vllm_migration.md#gpt-oss-120b-に切り替える手順qwen3-coder-next-が失敗したとき)）。
+  メモリ不足で落ちる場合は `--gpu-memory-utilization` を 0.7 に下げる（1台構成の gpt-oss-120b と同じ値）。
 - コンテナの中は 8000 番で待ち受け、`-p 11434:8000` でホストの 11434 番に転送する。`-p` は
   `--network host` と一緒には効かないので、`--network host` は付けない。
 - 11434 番は GB10-A からだけ届くよう、2章の `DOCKER-USER` の規則を入れておく。
@@ -207,10 +239,15 @@ pip install 'litellm[proxy]'
 ### 7.2 設定ファイル
 同じフォルダの [litellm-config.yaml](litellm-config.yaml) を配置し、GB10-B の `api_base` の IP と `master_key` を環境に合わせて変更する。GB10-A 側の `api_base` は `127.0.0.1:8000` のままでよい（LiteLLM と同じマシンのため）。
 
-| モデル | `api_base` |
-|---|---|
-| `qwen3-coder-next`（GB10-A） | `http://127.0.0.1:8000/v1` |
-| `gpt-oss-120b`（GB10-B） | `http://192.168.10.12:11434/v1` |
+| `model_name`（Claude Code が送る名前） | 行き先（vLLM の `--served-model-name`） | `api_base` |
+|---|---|---|
+| `claude-opus-4-6` | `qwen3-coder-next`（GB10-A） | `http://127.0.0.1:8000/v1` |
+| `claude-opus-4-7` | `gpt-oss-120b`（GB10-B） | `http://192.168.10.12:11434/v1` |
+
+**`model_name` は Opus 名だけにし、`claude-sonnet-*` は使わない。** Sonnet 名のモデルでは Claude Code の
+自動承認モードが使えないためである。2つのモデルは Opus のバージョン番号（4-6 と 4-7）で区別する。
+`claude-opus-4-6` を Qwen3-Coder-Next にしておくと、1台構成（[vllm_migration.md](../../pr33-38/vllm_migration.md)）や
+アプリの `LLM_MODEL` と同じ名前で同じモデルに届く。vLLM 側の `--served-model-name` は変えず、名前の付け替えは LiteLLM だけで行う。
 
 ### 7.3 起動
 ```bash
@@ -226,7 +263,7 @@ Docker（`ghcr.io/berriai/litellm`）で動かす場合は `--network host` で�
 GB10-A またはクライアントPCから実行する。Windows の PowerShell では `curl` が別コマンドの別名になっているため、Git Bash か WSL で実行するか、`curl.exe` と書く（その場合は改行の `\` とクォートを PowerShell 向けに直す）。
 
 ```bash
-for m in qwen3-coder-next gpt-oss-120b; do
+for m in claude-opus-4-6 claude-opus-4-7; do   # Qwen3-Coder-Next / gpt-oss-120b
   curl -s http://192.168.10.11:11434/v1/messages \
     -H "x-api-key: sk-local-change-me" \
     -H "anthropic-version: 2023-06-01" \
@@ -245,14 +282,14 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
 
 ```json
 {
-  "model": "opusplan",
+  "model": "claude-opus-4-6",
   "env": {
     "ANTHROPIC_BASE_URL": "http://192.168.10.11:11434",
     "ANTHROPIC_AUTH_TOKEN": "sk-local-change-me",
 
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-oss-120b",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3-coder-next",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3-coder-next",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-6",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-4-6",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-opus-4-6",
 
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
@@ -264,12 +301,17 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
 |---|---|
 | `ANTHROPIC_BASE_URL` | LiteLLM（GB10-A の 11434番）。クライアントの接続先はここだけ |
 | `ANTHROPIC_AUTH_TOKEN` | LiteLLM の `master_key` と同じ値（Hugging Face のトークンとは別物） |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | プルダウンの「Opus」枠 → gpt-oss-120b（GB10-B） |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | 「Sonnet」枠 → qwen3-coder-next（GB10-A） |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | タイトル生成などの裏方処理 → qwen3-coder-next |
-| `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` | LiteLLM の `/v1/models` を読み、実モデル名を `/model` ピッカーに「From gateway」として追加（v2.1.129+） |
+| `"model": "claude-opus-4-6"` | 起動時のモデル → Qwen3-Coder-Next（GB10-A、実装） |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | プルダウンの「Opus」枠 → `claude-opus-4-6`（Qwen3-Coder-Next） |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | 「Sonnet」枠・**Default** → これも `claude-opus-4-6`。Sonnet 枠を選んだり既定に戻ったりしても、`claude-sonnet-*` を送らない |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | タイトル生成などの裏方処理 → `claude-opus-4-6`（指定しないと存在しない Claude のモデル名を送って失敗する） |
+| `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` | LiteLLM の `/v1/models` を読み、`claude-opus-4-6`・`claude-opus-4-7` を `/model` ピッカーに「From gateway」として追加（v2.1.129+） |
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | テレメトリ等の外部通信を抑止 |
-| `"model": "opusplan"` | プランモード＝Opus枠（gpt-oss）、実行＝Sonnet枠（Qwen）に自動切替 |
+
+- **Sonnet 名（`claude-sonnet-*`）は使わない。** Sonnet 名のモデルでは自動承認モードが使えないため、
+  3つの枠すべてを Opus 名にし、gpt-oss-120b はバージョン違いの `claude-opus-4-7` で呼び分ける。
+- 以前の版にあった `"model": "opusplan"`（プランモードは Opus 枠、実行は Sonnet 枠に自動で切り替える）は使わない。
+  Sonnet 枠を使う前提の機能のため。設計と実装の切り替えは、9章のとおり手動で行う。
 
 > Superpowers プラグインや Context7 MCP など既存の設定がある場合は、`env` に追記する形でマージすること。
 
@@ -277,14 +319,20 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
 
 ## 9. 使い方：モデルの切り替え
 
-### 方法A：プルダウン / `/model`（手動切替）
-- **Opus** を選択 → gpt-oss-120b（GB10-B、設計・レビュー）
-- **Sonnet** を選択 → qwen3-coder-next（GB10-A、実装）
-- モデル自動検出が有効なら、`gpt-oss-120b` / `qwen3-coder-next` の実名でも選べる
+プルダウン（または `/model`）で、Opus のバージョン番号で選ぶ。
 
-### 方法B：`opusplan`（おすすめ・自動切替）
-1. Shift+Tab などでプランモードにし、設計を依頼 → gpt-oss-120b が設計
-2. プランを承認して実行 → qwen3-coder-next が実装
+| 選ぶもの | 使われるモデル | 向いている作業 |
+|---|---|---|
+| `claude-opus-4-6`（Opus 枠・Default） | Qwen3-Coder-Next（GB10-A） | 実装、リファクタリング、テスト作成、デバッグ |
+| `claude-opus-4-7` | gpt-oss-120b（GB10-B） | 要件整理、設計、方式比較、コードレビュー |
+
+- `claude-opus-4-7` は、モデル自動検出が有効ならプルダウンの「From gateway」に出る。出ない場合は
+  `/model claude-opus-4-7` と打てば切り替わる（`claude-opus-4-6` に戻すときも同じ）。
+- 設計から実装まで続けて頼むときは、`claude-opus-4-7` で計画を立てさせ、承認したら `/model claude-opus-4-6` に
+  切り替えて実装させる。会話の履歴は引き継がれる。
+- 切り替えた後に自動承認モード（Shift+Tab で切り替えるモード表示）が選べることを確かめる。選べない場合は、
+  使っている Claude Code の版がそのモデル名を自動承認モードの対象として扱っていない。`claude-opus-4-7` を
+  別の Opus 名に変える（LiteLLM の `model_name` と、ここで使う名前を一緒に変える）。
 
 ---
 
@@ -296,8 +344,10 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
 - [ ] クライアントPCから GB10-B の 11434番に**届かない**（2章）
 - [ ] LiteLLM 経由（GB10-A の 11434番）の `/v1/messages` で両モデルが応答する
 - [ ] VS Code の Claude Code で `/model` を開き、切り替え候補が表示される
-- [ ] Opus 選択時に GB10-B の `docker logs -f vllm-gptoss` にリクエストが来る
-- [ ] Sonnet 選択時に GB10-A の `docker logs -f vllm-qwen` にリクエストが来る
+- [ ] `claude-opus-4-7` を選ぶと GB10-B の `docker logs -f vllm-gptoss` にリクエストが来る
+- [ ] `claude-opus-4-6` を選ぶと GB10-A の `docker logs -f vllm-qwen` にリクエストが来る
+- [ ] どちらのモデルでも自動承認モードが選べる
+- [ ] LiteLLM のログ（`--detailed_debug`）に `claude-sonnet` という名前のリクエストが来ていない
 - [ ] ファイル読み書き・コマンド実行などのツール呼び出しが成功する
 
 ---
@@ -306,15 +356,18 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
 
 | 症状 | 確認ポイント |
 |---|---|
-| `model not found` | `--served-model-name`・LiteLLM の `model_name`・Claude Code の設定値が完全一致しているか |
+| `model not found` | Claude Code の設定値（`claude-opus-4-6`・`claude-opus-4-7`）と LiteLLM の `model_name` が完全一致しているか。LiteLLM の `litellm_params.model`（`hosted_vllm/<名前>`）と vLLM の `--served-model-name` が一致しているか |
+| `model not found` で名前が `claude-sonnet-...` / `claude-haiku-...` | `ANTHROPIC_DEFAULT_SONNET_MODEL`・`HAIKU_MODEL` が抜けている。8章のとおり `claude-opus-4-6` を入れる |
+| 自動承認モードが選べない | 使っているモデル名が Sonnet 名になっていないか（`/status` で確かめる）。9章の最後の注意を参照 |
 | 接続できない / タイムアウト | 2章のポート一覧どおりか（GB10-A：`sudo ufw status`、`ss -ltnp` で LiteLLM が 11434・vLLM が 127.0.0.1:8000。GB10-B：`docker ps` で `0.0.0.0:11434->8000/tcp`、`sudo iptables -L DOCKER-USER -n`）。GB10-B の 11434番が GB10-A から届くか |
-| 11434 番がすでに使われていて起動しない | Ollama が残っていないか（`sudo systemctl stop ollama && sudo systemctl disable ollama`） |
+| 11434 番がすでに使われていて起動しない | Ollama が残っていないか（`sudo systemctl stop ollama && sudo systemctl disable ollama`）。1台構成の `vllm` コンテナが自動起動していないか（`docker ps`。`docker update --restart no vllm && docker stop vllm`） |
+| CUDA グラフ取得中（`Capturing CUDA graphs`）に落ちる | `--enforce-eager` が抜けている。4・5章のコマンドどおり付けて起動し直す |
 | 401 / 認証エラー（LiteLLM） | `ANTHROPIC_AUTH_TOKEN` と LiteLLM の `master_key` が一致しているか |
 | モデル取得で `401` / `gated` | 利用申請が要るモデルを指定している。トークンは使わない方針なので、公開モデル（本書の2つ）を使う |
 | ツールが呼ばれず文章だけ返る | vLLM の `--enable-auto-tool-choice` と `--tool-call-parser`（gpt-oss=`openai`、Qwen=`qwen3_coder`）を確認 |
 | 長い会話で途中エラー | `--max-model-len` 超過。値を確認し、Claude Code 側の自動圧縮（`/compact`）を早めに使う |
 | Qwen が起動しない（OOM） | FP8 → 4bit 版へ変更、または `--max-model-len` / `--gpu-memory-utilization` を下げる。GB10-A は LiteLLM も動くので余白を残す |
-| プルダウンに実名が出ない | Claude Code のバージョン（v2.1.129+）と `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` を確認。出なくても Opus/Sonnet 枠で切替可能 |
+| プルダウンに `claude-opus-4-7` が出ない | Claude Code のバージョン（v2.1.129+）と `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` を確認。出なくても `/model claude-opus-4-7` で切替可能 |
 | 原因不明 | `litellm ... --detailed_debug` でリクエスト/レスポンスを確認 |
 
 ---

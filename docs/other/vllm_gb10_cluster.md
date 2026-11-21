@@ -11,6 +11,13 @@ GB10（DGX Spark）4台を200GbEのQSFPスイッチで繋ぎ、1台に載らな�
 > 足りないときの切り分けは [GB10のvLLMでメモリが枯渇したときの対処](vllm/vllm-gb10-memory.md)
 > にある。ここは**4台構成で増える部分**だけを書く。
 >
+> **1台構成で安定稼働を確認した起動コマンドは
+> [vllm_migration.md の手順1.5](../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する) にある。**
+> この文書の起動コマンドは、そこで有効だった指定（`--ipc=host`・`--ulimit memlock=-1`・
+> `--ulimit stack=67108864`・`--enforce-eager`・`--kv-cache-dtype fp8`・`--enable-prefix-caching`）を
+> 引き継ぐ。4台構成に要る `--network host`・`--node-rank`・`--headless` は `vllm serve` の
+> 機能なので、1台構成の `python3 -m vllm.entrypoints.openai.api_server` ではなく `vllm serve` で起動する。
+>
 > **トークンは使わない。** Hugging Face にはログインできない前提で、`HF_TOKEN` も
 > `hf auth login` も使わない。利用申請の要らない公開モデルだけを対象にする。
 > コンテナは [vllm_migration.md](../pr33-38/vllm_migration.md) と同じ既存のタグ
@@ -340,8 +347,13 @@ export HF_CACHE_DIR="$HOME/.cache/huggingface"
 
 4台すべてで、[メモリ枯渇の対処](vllm/vllm-gb10-memory.md) の1・2節を行う。
 
+1台構成の vLLM（[vllm_migration.md の手順1.5](../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する) で作ったコンテナ `vllm`）が
+動いている台では、それも止める。`--restart unless-stopped` 付きなので、止めないとメモリ（約100GB）と
+11434 番を握ったままになり、OS を再起動しても立ち上がってくる。
+
 ```bash
 sudo systemctl stop ollama
+docker update --restart no vllm 2>/dev/null && docker stop vllm   # 1台構成の vLLM がある台だけ
 docker rm -f vllm_cluster 2>/dev/null
 sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
 free -h
@@ -393,11 +405,13 @@ vllm serve <モデルのHFハンドル> \
   --pipeline-parallel-size 1 \
   --nnodes 4 "${NODE_ARGS[@]}" \
   --master-addr "$HEAD_IP" --master-port "$MASTER_PORT" \
-  --host 0.0.0.0 --port 8000 \
+  --host 0.0.0.0 --port 11434 \
+  --enforce-eager \
   --gpu-memory-utilization 0.8 \
   --max-model-len 32768 \
   --max-num-seqs 4 \
   --kv-cache-dtype fp8 \
+  --enable-prefix-caching \
   --api-key "<十分に長いランダム文字列>"
 ```
 
@@ -407,14 +421,21 @@ vllm serve <モデルのHFハンドル> \
 |`--nnodes 4` / `--node-rank 0〜3`|台数と各台の番号。ヘッドが0|
 |`--master-addr` / `--master-port`|台どうしが待ち合わせる先。4台ともヘッドのConnectXのIPと同じポート|
 |`--headless`|ワーカーはAPIを出さない|
-|`--gpu-memory-utilization 0.8`|各台の128GBに対する割合。OSの分を残す。落ちるなら下げる|
+|`--host 0.0.0.0 --port 11434`|`--network host` なので `-p` で番号を付け替えられない。1台構成と同じ 11434 番（ファイアウォールで開けている番号）でヘッドが直接待ち受ける|
+|`--enforce-eager`|CUDAグラフを使わず、その分のメモリを省く。1台構成で安定稼働した設定と同じ|
+|`--gpu-memory-utilization 0.8`|各台の128GBに対する割合。OSの分を残す（1台構成と同じ値）。落ちるなら下げる|
 |`--max-model-len` / `--max-num-seqs`|KVキャッシュの予約を抑えるため、まず小さめに始めて広げる|
+|`--kv-cache-dtype fp8` / `--enable-prefix-caching`|KVキャッシュをほぼ半分にする／共通の前置きの計算を使い回す。1台構成と同じ|
 |`--api-key`|vLLMは既定で無認証。社内LANへ出すなら必ず付ける|
 
 使うモデルのレシピに、パーサー（`--tool-call-parser` など）、量子化、`--trust-remote-code`
 などの指定があれば、4台すべてのコマンドに同じものを足す。コーディングエージェントから
 使うなら、道具呼び出しのフラグは必須である（[vllm-gb10-coding-agent.md](vllm/vllm-gb10-coding-agent.md)。Qwen3-Coder-Next なら
 `--enable-auto-tool-choice --tool-call-parser qwen3_coder`。[vllm_migration.md](../pr33-38/vllm_migration.md) と同じ）。
+このリポジトリのアプリ（ヘッドレスの Claude Code）から使うなら、1台構成と同じく
+`--served-model-name claude-opus-4-6` も足し、`.env` の `LLM_MODEL` と揃える。ただし `--api-key` を付けると
+アプリの事前チェックが `401` で通らない（[migration_vllm_app.md](../pr33-38/migration_vllm_app.md) の5節）。
+アプリから使う場合は `--api-key` を外し、11434 番に届く送信元をファイアウォールで絞る。
 
 ## 8. 動作を確かめる
 
@@ -422,11 +443,11 @@ node-1の別のシェルで確かめる。モデルのロードには時間が�
 返すまで待つ。
 
 ```bash
-curl --fail-with-body -i http://127.0.0.1:8000/health
+curl --fail-with-body -i http://127.0.0.1:11434/health
 
-curl http://127.0.0.1:8000/v1/models -H "Authorization: Bearer <api-key>"
+curl http://127.0.0.1:11434/v1/models -H "Authorization: Bearer <api-key>"
 
-curl http://127.0.0.1:8000/v1/chat/completions \
+curl http://127.0.0.1:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <api-key>" \
   -d '{"model":"<モデルのHFハンドル>","messages":[{"role":"user","content":"こんにちは"}],"max_tokens":64}'
@@ -442,7 +463,7 @@ curl http://127.0.0.1:8000/v1/chat/completions \
 - 推論中、4台それぞれで `free -h` の `available` が10GB以上残っている
 
 社内LANのクライアントからは、`127.0.0.1` を node-1 の管理用IPに替えて叩く。
-LiteLLM Proxy の背後に置く場合は、node-1 の `http://<管理IP>:8000/v1` を
+LiteLLM Proxy の背後に置く場合は、node-1 の `http://<管理IP>:11434/v1` を
 バックエンドとして登録する（LiteLLMの構成は [docs/other/proxy/](proxy/) の手順書を参照）。
 
 ## 9. 止める・起動し直す
@@ -458,6 +479,14 @@ done
 
 モデルと実行時のキャッシュはホストに残るので、2回目以降の起動は速い。
 起動し直すときは7-2節から行う。
+
+1台構成の vLLM に戻すときは、`vllm_cluster` を止めた台で、7-2節で止めたコンテナ `vllm` を
+自動起動ありに戻して起動する。
+
+```bash
+docker update --restart unless-stopped vllm && docker start vllm
+docker logs -f vllm   # Application startup complete が出るまで待つ
+```
 
 ネットワーク設定を元に戻すときは、4台で次を実行する。スイッチ側は、自動
 ネゴシエーションとブリッジの設定を元に戻す。
@@ -522,9 +551,12 @@ docker exec -it $VLLM_CONTAINER /bin/bash -c '
   vllm serve <モデルのHFハンドル> \
     --tensor-parallel-size 4 \
     --distributed-executor-backend ray \
+    --host 0.0.0.0 --port 11434 \
+    --enforce-eager \
     --gpu-memory-utilization 0.8 \
     --max-model-len 32768 --max-num-seqs 4 \
     --kv-cache-dtype fp8 \
+    --enable-prefix-caching \
     --api-key "<十分に長いランダム文字列>"'
 ```
 
@@ -545,7 +577,9 @@ Rayのダッシュボード（`http://<ヘッドのIP>:8265`）は認証が無�
 |`mpirun` が止まる・タイムアウトする|SSHがパスワードを聞いている|4節のSSHを張り直す。`mpirun -np 4 -H ...:1,... hostname` で切り分ける|
 |NCCLテストで `libnccl.so.2` が無い|NCCLを4台すべてでビルドしていない|5節のビルドを残りの台で行い、`LD_LIBRARY_PATH` を設定する|
 |vLLMの起動が待ったまま進まない|4台のうち1台が起動していない、または `--master-addr` が違う|4台すべてのコンテナのログを見る。1台の失敗でヘッドも止まる|
-|1台だけOOMで落ちる|その台にOllamaやキャッシュが残っている|その台で7-2節を行う。`--gpu-memory-utilization` を下げる|
+|1台だけOOMで落ちる|その台にOllama・1台構成の `vllm` コンテナ・キャッシュが残っている|その台で7-2節を行う（`docker ps` で `vllm` が動いていないか見る）。`--gpu-memory-utilization` を下げる|
+|ヘッドの起動が `address already in use`（11434番）で落ちる|1台構成の `vllm` コンテナかOllamaが11434番を使っている|7-2節のとおり `docker update --restart no vllm && docker stop vllm`、`sudo systemctl stop ollama`|
+|CUDAグラフの取得中（`Capturing CUDA graphs`）に落ちる|`--enforce-eager` が抜けている|7-4節のコマンドどおり4台すべてに付ける|
 |ログに `NET/Socket` と出る・遅い|NCCLがRoCEを使えていない|`NCCL_IB_HCA` と `--privileged` を確認。帯域が出ないならパイプライン並列へ|
 |rsyncで写し先のディレクトリが無いと言われる|写し先に `~/.cache/huggingface` が無い|6節のとおり `--mkpath` を付ける|
 |モデルが見つからないと言われる|4台のうちどこかにモデルが無い|6節。4台で同じパスにそろえる|

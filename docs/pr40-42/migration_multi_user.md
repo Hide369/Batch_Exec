@@ -27,7 +27,7 @@ git pull
 nano /opt/Batch_Exec/.env
 ```
 
-- `LLM_BASE_URL=http://127.0.0.1:11434` にする（vLLM の `--port` と同じ）
+- `LLM_BASE_URL=http://127.0.0.1:11434` にする（vLLM コンテナの `-p 11434:8000` のホスト側ポートと同じ）
 - `LLM_CONCURRENCY` と `OLLAMA_BASE_URL` の行を消す（どちらももう読まない）
 - 夜間タイマー（`godoc-nightly.timer`）を使っている場合は、ユニットに書いていた値を移す
 

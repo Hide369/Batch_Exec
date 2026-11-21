@@ -101,8 +101,9 @@ ollama stop <モデル名>
 sudo systemctl stop ollama
 sudo systemctl disable ollama   # 任意
 
-# 前回のvLLMが残っていれば停止
-pkill -f "vllm serve"
+# 前回のvLLMが残っていれば停止（コンテナ・直接起動のどちらも）
+docker rm -f vllm
+pkill -f "vllm serve|vllm.entrypoints.openai.api_server"
 ```
 
 停止後に `free -h` を再実行し、`available` が増えたことを確認する。
@@ -132,7 +133,7 @@ mkdir -p ~/.cache/huggingface
 
 ### モデルを先にダウンロードする（進捗を見るため）
 
-モデル（約85GB）は `vllm serve` の初回起動時にも自動でダウンロードされるが、`-d` で起動するとダウンロードの進捗が見えず、止まったのか進んでいるのか区別できない。先にダウンロードだけを単独で実行しておくと、進捗バーが表示される。
+モデル（約85GB）は vLLM の初回起動時にも自動でダウンロードされるが、`-d` で起動するとダウンロードの進捗が見えず、止まったのか進んでいるのか区別できない。先にダウンロードだけを単独で実行しておくと、進捗バーが表示される。
 
 ```bash
 # 同じイメージを使うので、ホスト側への追加インストールは不要
@@ -145,9 +146,9 @@ docker run --rm -it \
 ```
 
 - `You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN...` という警告が出ても、ダウンロードは続く。公開モデルなのでトークンは必須ではない（速度制限が厳しくなるだけ）。警告を消したい場合は、Hugging Face で Read 権限のトークンを作り、`-e HF_TOKEN=<トークン>` を付ける
-- ダウンロード済みのモデルは `~/.cache/huggingface` に残り、次の `vllm serve` はそれを使う
+- ダウンロード済みのモデルは `~/.cache/huggingface` に残り、次に起動する vLLM はそれを使う
 
-すでに `vllm serve` のコンテナでダウンロードが始まっている場合は、別の端末で容量の増え方を見る。約85GBに近づけば終わりかけている。
+すでに vLLM のコンテナでダウンロードが始まっている場合は、別の端末で容量の増え方を見る。約85GBに近づけば終わりかけている。
 
 ```bash
 watch -n 10 'du -sh ~/.cache/huggingface/hub/models--Qwen--Qwen3-Coder-Next-FP8'
@@ -155,28 +156,48 @@ watch -n 10 'du -sh ~/.cache/huggingface/hub/models--Qwen--Qwen3-Coder-Next-FP8'
 
 ### コンテナで vLLM を起動する
 
-手順3の `vllm serve` は、次のようにコンテナ内で実行する。`-d` を付けているので、コマンドはコンテナIDを1行表示してすぐ終わる。以降の処理はバックグラウンドで進むため、止まったわけではない。状況は `docker logs -f vllm` で見る。
-
-コンテナ内の vLLM は 8000 番（`--port 8000`）で待ち受け、`-p 11434:8000` でホストの 11434 番に転送する。アプリ・`curl` からの接続先は、直接起動した場合と同じ 11434 番。`-p` は `--network host` と一緒には効かないので、`--network host` は付けない。
+vLLM は次のコマンドでコンテナとして起動する。移行先の GB10 で実際に安定稼働しているコマンドで、この手順書の基準にする（手順2のキャッシュ解放を済ませてから実行する）。`-d` を付けているので、コマンドはコンテナIDを1行表示してすぐ終わる。以降の処理はバックグラウンドで進むため、止まったわけではない。状況は `docker logs -f vllm` で見る。
 
 ```bash
-docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
+docker run -d \
+  --name vllm \
+  --gpus all \
+  --ipc=host \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  -p 11434:8000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --restart unless-stopped \
   nvcr.io/nvidia/vllm:26.10-py3 \
-  vllm serve Qwen/Qwen3-Coder-Next-FP8 \
-    --served-model-name claude-opus-4-6 \
-    --host 0.0.0.0 --port 8000 \
-    --gpu-memory-utilization 0.8 \
-    --max-model-len 262144 \
-    --kv-cache-dtype fp8 \
-    --enable-auto-tool-choice --tool-call-parser qwen3_coder
+  python3 -m vllm.entrypoints.openai.api_server \
+  --model Qwen/Qwen3-Coder-Next-FP8 \
+  --served-model-name claude-opus-4-6 \
+  --enforce-eager \
+  --gpu-memory-utilization 0.8 \
+  --max-model-len 262144 \
+  --kv-cache-dtype fp8 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder \
+  --enable-prefix-caching
 
-# ログ（手順3・4の ~/vllm.log の代わり）
+# ログ（手順4の確認もこれで見る）
 docker logs -f vllm
 
-# 設定を変えて起動し直すときは、先に削除する
+# 設定を変えて起動し直すときは、先に削除する（--restart unless-stopped 付きでも rm -f で消える）
 docker rm -f vllm
 ```
+
+| 指定 | 意味 |
+| --- | --- |
+| `--ipc=host` | PyTorch がプロセス間で使う共有メモリ（`/dev/shm`）をホストと共有する。コンテナ既定の 64MB では足りない |
+| `--ulimit memlock=-1` `--ulimit stack=67108864` | ロックできるメモリ量を無制限に、スタックを 64MB にする（NVIDIA のコンテナで推奨される値） |
+| `-p 11434:8000` | コンテナ内の vLLM は既定の 8000 番で待ち受け、ホストの 11434 番（Ollama と同じ番号）に転送する。アプリ・`curl` の接続先は 11434 番。`-p` は `--network host` と一緒には効かないので、`--network host` は付けない |
+| `--restart unless-stopped` | OS・Docker の再起動後に自動で起動する（「運用メモ」参照）。`docker stop vllm` で手動で止めたときは立ち上がらない |
+| `python3 -m vllm.entrypoints.openai.api_server --model ...` | OpenAI・Anthropic 互換の API サーバーを起動する（`vllm serve <モデル>` と同じサーバー）。モデルは `--model` で渡す |
+| `--enforce-eager` | CUDA グラフを使わない。グラフ分のメモリを節約し、起動時のグラフ取得で落ちるのを防ぐ（速度は少し下がる） |
+| `--enable-prefix-caching` | 同じ前置き（システムプロンプト・スキル）の計算結果を使い回す。1ファイルずつ同じ指示で `claude -p` を呼ぶバッチで効く |
+
+その他の引数（`--gpu-memory-utilization`・`--max-model-len` など）の意味は手順3の表を参照。
 
 ## 手順2: ページキャッシュを解放する
 
@@ -192,44 +213,33 @@ free -h   # buff/cache が減り available が増えたことを確認
 
 ## 手順3: メモリ制限付きで vLLM を起動する
 
-まず保守的な値で起動し、安定を確認してから少しずつ緩める。
+手順1.5の「コンテナで vLLM を起動する」のコマンドで起動する。値はメモリを絞った設定で、移行先の GB10 で安定稼働を確認済み。
 
 Qwen3-Coder-Next FP8 は重みだけで約85GBあるため、`--gpu-memory-utilization` は 0.75 未満にすると重みが載らない。メモリが足りないときは、まず `--max-model-len` を下げる。
 
-| パラメータ | 既定値 | 推奨初期値 | 効果 |
+| パラメータ | vLLM の既定値 | 稼働中の値 | 効果 |
 | --- | --- | --- | --- |
 | `--gpu-memory-utilization` | 0.9 | 0.8 | vLLM が予約するメモリの割合（0.8 で約100GB）。残り約25GBが OS の分 |
 | `--max-model-len` | 262144 | 262144 | Ollama の `OLLAMA_CONTEXT_LENGTH`・`.env` の `LLM_NUM_CTX` と同じ値にする |
 | `--kv-cache-dtype` | auto | fp8 | KV キャッシュをほぼ半減。256K を載せるために使う |
 | `--served-model-name` | モデルのリポジトリ名 | claude-opus-4-6 | API で指定するモデル名（別名）。`.env` の `LLM_MODEL` と揃える |
 | `--enable-auto-tool-choice` `--tool-call-parser` | 無効 | 有効・`qwen3_coder` | Claude Code などのツール呼び出しを解釈する |
-| `--enforce-eager` | 無効 | 必要時のみ | CUDA グラフ分のメモリを節約（速度は低下） |
+| `--enforce-eager` | 無効 | 有効 | CUDA グラフ分のメモリを節約（速度は少し低下） |
+| `--enable-prefix-caching` | 無効（モデルによっては有効） | 有効 | 共通の前置きの計算を使い回し、同じ指示で繰り返し呼ぶバッチを速くする |
 
-```bash
-vllm serve Qwen/Qwen3-Coder-Next-FP8 \
-  --served-model-name claude-opus-4-6 \
-  --host 0.0.0.0 --port 11434 \
-  --gpu-memory-utilization 0.8 \
-  --max-model-len 262144 \
-  --kv-cache-dtype fp8 \
-  --enable-auto-tool-choice --tool-call-parser qwen3_coder \
-  2>&1 | tee ~/vllm.log
-```
+まだ枯渇する場合は、次の順で一つずつ変更する。変えるたびに `docker rm -f vllm` で消し、手順1.5のコマンドの該当する引数を書き換えて起動し直す。`--max-model-len` を変えたら、`.env` の `LLM_NUM_CTX` も同じ値にする。
 
-まだ枯渇する場合は、次の順で一つずつ追加・変更する。`--max-model-len` を変えたら、`.env` の `LLM_NUM_CTX` も同じ値にする。
-
-1. `--enforce-eager` を追加
-2. `--max-model-len` を 131072 に下げる
-3. 同時に処理するファイル数を 1 に下げる（Web 画面の同時セッション数・`--concurrency` を 1 にする）
-4. `--max-model-len` を 65536 に下げる
+1. `--max-model-len` を 131072 に下げる
+2. 同時に処理するファイル数を 1 に下げる（Web 画面の同時セッション数・`--concurrency` を 1 にする）
+3. `--max-model-len` を 65536 に下げる
 
 ## 手順4: 起動確認と動作テスト
 
 vLLM は、モデルの読み込みとウォームアップがすべて終わってから API を受け付ける。それまでは `curl` が `Connection refused` になるが、これは正常な挙動。`docker logs -f vllm` で、次の順に進むのを待つ。
 
 1. `Loading safetensors checkpoint shards: xx%`（モデルの読み込み）
-2. `torch.compile` / `Capturing CUDA graphs`（ウォームアップ。数分止まって見えることがある）
-3. `Application startup complete` / `Uvicorn running on http://0.0.0.0:8000`（起動完了。ここから `curl` が通る。コンテナ内では 8000 番で待ち受け、ホストの 11434 番に転送される。コンテナを使わず直接起動した場合は `:11434` と出る）
+2. `KV cache` の確保量の表示（ウォームアップ。数分止まって見えることがある。`--enforce-eager` を付けているので `Capturing CUDA graphs` は出ない）
+3. `Application startup complete` / `Uvicorn running on http://0.0.0.0:8000`（起動完了。ここから `curl` が通る。コンテナ内では 8000 番で待ち受け、ホストの 11434 番に転送される）
 
 途中で止まって見えるときは、次で進んでいるかを確かめる。
 
@@ -291,7 +301,7 @@ watch -n 2 free -h
 
 - [ ] `/v1/chat/completions` と `/v1/messages` の両方で応答が返る（`/v1/messages` が 404 なら vLLM が古い。イメージが `26.10-py3` になっているか確かめる）
 - [ ] 推論中も `available` が 10GB 以上残っている（OS の余裕）
-- [ ] ログに `KV cache` の確保量と最大同時処理数が出ている（`grep -i "kv cache" ~/vllm.log`）。262144 トークンが収まっていること
+- [ ] ログに `KV cache` の確保量と最大同時処理数が出ている（`docker logs vllm 2>&1 | grep -i "kv cache"`）。262144 トークンが収まっていること
 
 ## 手順5: アプリ（Claude Code ヘッドレス）から使う
 
@@ -301,19 +311,12 @@ watch -n 2 free -h
 
 ### 案1: `--served-model-name` に Claude 名の別名を足す（推奨）
 
-Modelfile の直接の代わりになる。手順1.5・3 の起動コマンドの `--served-model-name` を次のようにする。`claude-opus-4-6` の部分は、Ollama の Modelfile で付けていた名前と同じにする。
+Modelfile の直接の代わりになる。手順1.5の起動コマンドは、すでに `--served-model-name claude-opus-4-6` で Claude 名の別名を付けている。`claude-opus-4-6` の部分は、Ollama の Modelfile で付けていた名前と同じにする。
+
+元のモデル名でも呼びたい場合は、手順1.5のコマンドの該当行に名前を足して起動し直す（必須ではない。アプリは先頭の名前だけを使う）。
 
 ```bash
-docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
-  -v ~/.cache/huggingface:/root/.cache/huggingface \
-  nvcr.io/nvidia/vllm:26.10-py3 \
-  vllm serve Qwen/Qwen3-Coder-Next-FP8 \
-    --served-model-name claude-opus-4-6 qwen3-coder-next \
-    --host 0.0.0.0 --port 8000 \
-    --gpu-memory-utilization 0.8 \
-    --max-model-len 262144 \
-    --kv-cache-dtype fp8 \
-    --enable-auto-tool-choice --tool-call-parser qwen3_coder
+  --served-model-name claude-opus-4-6 qwen3-coder-next \
 ```
 
 アプリの `.env` を vLLM に向ける。接続先は `LLM_BASE_URL` に書く（`claude` 起動時の `ANTHROPIC_BASE_URL` と、実行前の事前チェックに使われる）。末尾に `/v1` は付けない（Claude Code が `/v1/messages` を付ける）。`LLM_MODEL` は `--served-model-name` の先頭の名前にする。
@@ -331,7 +334,6 @@ LLM_MODEL=claude-opus-4-6
 - アプリは `ANTHROPIC_AUTH_TOKEN=local` を渡す（以前の版は `ollama`）。vLLM を `--api-key` なしで起動していれば値は見られない
 - `/v1/models` の一覧と応答の `model` 欄には先頭の名前（`claude-opus-4-6`）が出る
 - gpt-oss-120b で動かす場合も同じ。`--served-model-name claude-opus-4-6 gpt-oss-120b` とし、`.env` の `LLM_NUM_CTX=131072` は「gpt-oss-120b に切り替える手順」のとおりにする
-- 運用メモの systemd 化をする場合は、`ExecStart` の `--served-model-name` も同じにする
 
 起動後、Claude Code が使う Anthropic 互換の `/v1/messages` に Claude 名で応答が返るかを確かめる。
 
@@ -482,7 +484,9 @@ sudo systemctl start godoc-nightly.timer
 | 起動時に `CUDA out of memory` | 予約割合が空きより大きい | 手順1・2を実施する。それでも出る場合は `--gpu-memory-utilization` を 0.75 まで下げ、`--max-model-len` も下げる |
 | `No available memory for the cache blocks` | 重みを載せた後に KV キャッシュの余地がない | `--max-model-len` を下げる、`fp8` KV キャッシュを使う。`--gpu-memory-utilization` は 0.85 までにとどめる |
 | `max_model_len` が KV キャッシュに収まらないと出る | コンテキスト長が大きすぎる | `--max-model-len` をエラーが示す値以下にし、`.env` の `LLM_NUM_CTX` も揃える |
-| CUDA グラフ取得中に落ちる | グラフ用メモリ不足 | `--enforce-eager` を追加 |
+| CUDA グラフ取得中（`Capturing CUDA graphs`）に落ちる | `--enforce-eager` が抜けている | 手順1.5のコマンドどおり `--enforce-eager` を付けて起動し直す |
+| 起動直後に `RLIMIT_MEMLOCK` や共有メモリ（`/dev/shm`）不足のエラーで落ちる | `--ipc=host`・`--ulimit` が抜けている | 手順1.5のコマンドどおり `--ipc=host --ulimit memlock=-1 --ulimit stack=67108864` を付けて起動し直す |
+| 止めたはずの vLLM が再起動後に立ち上がり、Ollama とメモリを取り合う | `--restart unless-stopped` で起動している | `docker update --restart no vllm` の後に `docker stop vllm`（やめる場合は `docker rm -f vllm`） |
 | 端末が固まる・OS が応答しない | OS の分まで使い切った | 再起動後、`--gpu-memory-utilization 0.75`・`--max-model-len 131072` で起動し直す |
 | 推論中に落ちる | 長い入力や同時リクエストで KV 不足 | `--max-model-len` を下げ、同時セッション数（Web 画面・`--concurrency`）を減らす |
 | VS Code（Claude Code）から使うと、サーバー側で reasoning parser のエラーが出る | Claude Code がシンキングを指定してリクエストしている | 手順5の「Claude Code のシンキングを止める」で、Claude Code 側のシンキングをオフにする |
@@ -498,24 +502,26 @@ sudo systemctl start godoc-nightly.timer
 
 手順3の調整を試しても Qwen3-Coder-Next が起動しない、またはツール呼び出しが安定しない場合は、vLLM のまま gpt-oss-120b（`openai/gpt-oss-120b`）に切り替える。重みは約65GBと小さく、メモリに余裕がある。アカウント登録は要らない（Apache-2.0、利用申請のないモデル）。
 
-gpt-oss-120b のコンテキスト長は最大 131072（128K）で、256K にはできない。アプリの `.env` を次のように変える（変更前の `.env` は「準備」で `~/ollama-backup/env.bak` に控えてある）。`LLM_NUM_CTX` を下げると、大きなファイルは事前チェックで `too_large` として対象外になる。
+gpt-oss-120b のコンテキスト長は最大 131072（128K）で、256K にはできない。アプリの `.env` を次のように変える（変更前の `.env` は「準備」で `~/ollama-backup/env.bak` に控えてある）。`LLM_NUM_CTX` を下げると、大きなファイルは事前チェックで `too_large` として対象外になる。`--served-model-name` の先頭を `claude-opus-4-6` のままにするので、`LLM_MODEL` は変えない（ヘッドレスの Claude Code は Claude のモデル名しか受け付けない）。
 
 ```bash
 # /opt/Batch_Exec/.env（変えたら sudo systemctl reload godoc-web）
-LLM_MODEL=gpt-oss-120b
+LLM_MODEL=claude-opus-4-6       # 変えない（--served-model-name の先頭と同じ）
 LLM_NUM_CTX=131072
 ```
 
 | 項目 | Qwen3-Coder-Next | gpt-oss-120b |
 | --- | --- | --- |
-| モデル | `Qwen/Qwen3-Coder-Next-FP8` | `openai/gpt-oss-120b` |
+| モデル（`--model`） | `Qwen/Qwen3-Coder-Next-FP8` | `openai/gpt-oss-120b` |
 | 重みの大きさ | 約85GB | 約65GB |
 | `--gpu-memory-utilization` | 0.8 | 0.7 |
 | `--max-model-len`（= `LLM_NUM_CTX`） | 262144 | 131072（上限） |
 | `--kv-cache-dtype` | fp8 | 指定しない（KV キャッシュが小さく不要） |
 | `--tool-call-parser` | `qwen3_coder` | `openai` |
-| `--served-model-name`（= `LLM_MODEL`） | qwen3-coder-next | gpt-oss-120b |
+| `--served-model-name`（先頭 = `LLM_MODEL`） | `claude-opus-4-6` | `claude-opus-4-6 gpt-oss-120b` |
 | 必要な vLLM | 0.15.0 以上 | 0.10.1 以上 |
+
+`docker run` のオプション（`--ipc=host`・`--ulimit`・`-p 11434:8000`・`--restart unless-stopped`）と `--enforce-eager`・`--enable-prefix-caching` は Qwen3-Coder-Next と同じにする。
 
 ```bash
 # 1. Qwen3-Coder-Next の vLLM を止める
@@ -530,15 +536,25 @@ sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
 free -h
 
 # 4. gpt-oss-120b で起動（モデルは初回起動時に自動でダウンロードされる）
-docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
+docker run -d \
+  --name vllm \
+  --gpus all \
+  --ipc=host \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  -p 11434:8000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --restart unless-stopped \
   nvcr.io/nvidia/vllm:26.10-py3 \
-  vllm serve openai/gpt-oss-120b \
-    --served-model-name gpt-oss-120b \
-    --host 0.0.0.0 --port 8000 \
-    --gpu-memory-utilization 0.7 \
-    --max-model-len 131072 \
-    --enable-auto-tool-choice --tool-call-parser openai
+  python3 -m vllm.entrypoints.openai.api_server \
+  --model openai/gpt-oss-120b \
+  --served-model-name claude-opus-4-6 gpt-oss-120b \
+  --enforce-eager \
+  --gpu-memory-utilization 0.7 \
+  --max-model-len 131072 \
+  --enable-auto-tool-choice \
+  --tool-call-parser openai \
+  --enable-prefix-caching
 
 docker logs -f vllm
 
@@ -546,16 +562,16 @@ docker logs -f vllm
 curl http://localhost:11434/v1/models
 curl http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-oss-120b","messages":[{"role":"user","content":"こんにちは"}],"max_tokens":64}'
+  -d '{"model":"claude-opus-4-6","messages":[{"role":"user","content":"こんにちは"}],"max_tokens":64}'
 ```
 
-- [ ] `/v1/models` に `gpt-oss-120b` が出る
+- [ ] `/v1/models` に `claude-opus-4-6` と `gpt-oss-120b` が出る
 - [ ] 応答が返る
 - [ ] 推論中も `available` が 10GB 以上残っている
 
-- メモリが足りない場合は、手順3と同じ順（`--enforce-eager` を追加 → `--max-model-len` を下げる）で調整する。`--gpu-memory-utilization` は 0.6 まで下げられる
+- メモリが足りない場合は、手順3と同じ順（`--max-model-len` を下げる → 同時処理数を下げる）で調整する。`--gpu-memory-utilization` は 0.6 まで下げられる
 - gpt-oss-120b でのツール呼び出しは `tool_choice="auto"` だけに対応している
-- Qwen3-Coder-Next に戻すときは、`docker rm -f vllm` の後に手順1.5の `docker run` で起動し直し、`.env` の `LLM_MODEL`（`claude-opus-4-6`）・`LLM_NUM_CTX` を戻して `sudo systemctl reload godoc-web` する
+- Qwen3-Coder-Next に戻すときは、`docker rm -f vllm` の後に手順1.5の `docker run` で起動し直し、`.env` の `LLM_NUM_CTX` を 262144 に戻して `sudo systemctl reload godoc-web` する
 - gpt-oss-120b でも動かない場合は、次の「Ollama に戻す手順」で元に戻す
 - 参照: [vLLM の gpt-oss-120b レシピ](https://recipes.vllm.ai/openai/gpt-oss-120b)
 
@@ -567,10 +583,10 @@ vLLM の導入や起動に失敗したとき、または試用をやめるとき
 
 ```bash
 # 1. vLLM を止める（起動方法に合う行だけでよい。該当しない行のエラーは無視できる）
-docker update --restart no vllm      # 再起動ポリシーを付けていた場合（運用メモ参照）
+docker update --restart no vllm      # 手順1.5のコマンド（--restart unless-stopped 付き）で起動した場合
 docker rm -f vllm                    # コンテナで起動した場合
 sudo systemctl disable --now vllm    # 運用メモの systemd 化をした場合
-pkill -f "vllm serve"                # 直接起動した場合
+pkill -f "vllm serve|vllm.entrypoints.openai.api_server"   # コンテナを使わず直接起動した場合
 
 # 2. メモリが解放されたか（available が大きく戻っていればよい）
 sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
@@ -606,7 +622,7 @@ sudo systemctl start godoc-nightly.timer
 
 ```bash
 # 1. vLLM のプロセス・コンテナが残っていないか
-pgrep -af "vllm serve"                  # 何も表示されなければよい
+pgrep -af "vllm serve|vllm.entrypoints.openai.api_server"   # 何も表示されなければよい
 docker ps -a --filter name=vllm         # 見出し行だけならよい
 
 # 2. コンテナが残っていれば削除
@@ -630,7 +646,7 @@ sudo systemctl reset-failed
 rm -rf /path/to/venv
 
 # 7. ログを削除
-rm -f ~/vllm.log
+rm -f ~/vllm.log   # コンテナを使わず直接起動していた場合だけ（コンテナのログはコンテナと一緒に消える）
 ```
 
 - [ ] `docker images nvcr.io/nvidia/vllm` に何も表示されない
@@ -649,11 +665,11 @@ rm -f ~/vllm.log
 
 ### 再起動後も自動で起動する（コンテナで導入した場合）
 
-コンテナで導入した場合は、Docker の再起動ポリシーを付けるのが簡単。動作中のコンテナにそのまま適用できるので、作り直しやモデルのダウンロードのやり直しは要らない。
+手順1.5のコマンドは `--restart unless-stopped`（Docker の再起動ポリシー）を付けているので、OS を再起動すると vLLM も自動で立ち上がる。あとは Docker と Ollama の自動起動を確認するだけでよい。
 
 ```bash
-# 1. 自動で再起動するように設定（動作中のコンテナにそのまま適用される）
-docker update --restart unless-stopped vllm
+# 1. 再起動ポリシーが付いているか（unless-stopped と出ればよい）
+docker inspect vllm --format '{{.HostConfig.RestartPolicy.Name}}'
 
 # 2. Docker 自体が OS 起動時に立ち上がるか確認（enabled ならよい）
 systemctl is-enabled docker
@@ -662,10 +678,10 @@ systemctl is-enabled docker
 sudo systemctl disable --now ollama
 ```
 
+- 1 で `no` と出た場合（`--restart` を付けずに作ったコンテナ）は、`docker update --restart unless-stopped vllm` で付けられる。動作中のコンテナにそのまま適用されるので、作り直しやモデルのダウンロードのやり直しは要らない
 - 再起動後は、モデルの読み込みとウォームアップに数分かかる。`Application startup complete` が出るまでは `Connection refused` になる
 - 手動で止めるときは `docker stop vllm`。`unless-stopped` なので、手動で止めた場合は次の再起動では立ち上がらない
-- コンテナを作り直すときは、`docker run` に `--restart unless-stopped` を付けておけば同じ設定になる
-- Ollama に戻すときは、「Ollama に戻す手順」の前に `docker update --restart no vllm` を実行する。実行しないと、再起動のたびに vLLM が立ち上がり Ollama とメモリを取り合う
+- Ollama に戻すときは、「Ollama に戻す手順」のとおり `docker update --restart no vllm` を実行してから止める。実行しないと、再起動のたびに vLLM が立ち上がり Ollama とメモリを取り合う
 
 ### systemd で常駐化する
 
@@ -681,15 +697,18 @@ Conflicts=ollama.service
 [Service]
 User=<ユーザー名>
 ExecStartPre=+/bin/sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
-ExecStart=/path/to/venv/bin/vllm serve Qwen/Qwen3-Coder-Next-FP8 --served-model-name claude-opus-4-6 --host 0.0.0.0 --port 11434 --gpu-memory-utilization 0.8 --max-model-len 262144 --kv-cache-dtype fp8 --enable-auto-tool-choice --tool-call-parser qwen3_coder
+ExecStart=/usr/bin/docker run --rm --name vllm --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -p 11434:8000 -v /home/<ユーザー名>/.cache/huggingface:/root/.cache/huggingface nvcr.io/nvidia/vllm:26.10-py3 python3 -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-Coder-Next-FP8 --served-model-name claude-opus-4-6 --enforce-eager --gpu-memory-utilization 0.8 --max-model-len 262144 --kv-cache-dtype fp8 --enable-auto-tool-choice --tool-call-parser qwen3_coder --enable-prefix-caching
+ExecStop=/usr/bin/docker stop vllm
 Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
 ```
 
+- 引数は手順1.5のコマンドと同じ。ただし `-d` と `--restart unless-stopped` は外し、`--rm` を付ける（再起動は systemd が受け持つ。Docker の再起動ポリシーと両方あると二重に起動しようとする）
+- systemd は `~` を展開しないので、`-v` のパスはフルパスで書く。`User=` のユーザーが `docker` グループに入っている必要がある
+- 先に手順1.5で作ったコンテナは `docker rm -f vllm` で消しておく（同じ名前のコンテナがあると起動できない）
 - `ExecStartPre` のキャッシュ解放は root 権限が必要なため、先頭に `+` を付けて root で実行している
 - `Conflicts=ollama.service` で、vLLM 起動時に Ollama が自動停止する
 - GB10 1台に載るのは Qwen3-Coder-Next 1モデルだけ。ほかのモデルを同時に動かす余裕はない
-- gpt-oss-120b に切り替えて運用する場合は、`Description` と `ExecStart` の `vllm serve` 以降を「gpt-oss-120b に切り替える手順」の内容にする
-- コンテナで導入した場合は、`ExecStart` を手順1.5の `docker run`（`-d` を外し `--rm` を付ける）に、`ExecStop` を `docker stop vllm` にする
+- gpt-oss-120b に切り替えて運用する場合は、`Description` と `ExecStart` の `--model` 以降を「gpt-oss-120b に切り替える手順」の内容にする

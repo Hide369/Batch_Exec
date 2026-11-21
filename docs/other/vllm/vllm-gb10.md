@@ -33,6 +33,16 @@ RAGの生成とコーディングエージェントを社内ネットワーク�
 > [出典](#出典) の各ページで必ず現物を確認すること。所要時間・トークン毎秒の
 > 数値をこの文書に書いていないのは、測っていないものを書かないためである。
 
+> **このリポジトリのサーバーで稼働中の vLLM（2026-11-21）**
+> 移行先の GB10 では、[vllm_migration.md の手順1.5](../../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する) の
+> コマンドで vLLM がコンテナ名 `vllm` として常駐している（Qwen3-Coder-Next、`--served-model-name claude-opus-4-6`、
+> `-p 11434:8000`、`--restart unless-stopped`）。この文書の起動例を同じ GB10 で試すときは、先に
+> `docker update --restart no vllm && docker stop vllm` で止める。止めないと 11434 番とメモリを取り合い、
+> OS を再起動するたびに `vllm` が先に立ち上がる。戻すときは `docker update --restart unless-stopped vllm && docker start vllm`。
+>
+> 1台構成で安定稼働を確認した指定のうち、`--ulimit memlock=-1 --ulimit stack=67108864` と `--enforce-eager` は
+> この文書の起動例に入っていない。起動例が起動直後やCUDAグラフの取得中に落ちるときは、まずこれらを足して試す。
+
 ## 目次
 
 - [GB10で先に知っておくこと](#gb10で先に知っておくこと)
@@ -93,6 +103,8 @@ MoEが多いのはこのためである。
 |127.0.0.1:8001〜|2本目以降のvLLM（埋め込み・VLM・リランカーなど）。コンテナの中は同じく 8000 番|開けない|GB10 自身だけ|
 
 - **`vllm serve` には常に `--host 0.0.0.0 --port 8000` を渡す。** ホスト側の番号は `-p` だけで決める。
+  1台構成で稼働中の `python3 -m vllm.entrypoints.openai.api_server`（[vllm_migration.md の手順1.5](../../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する)）は、
+  既定で全アドレスの 8000 番で待ち受けるので、`--host`・`--port` を書かなくても同じになる。
 - **LANから届くvLLMは1本だけ**（11434番）。2本目以降をクライアントPCから使いたいときは、
   ファイアウォールに穴を足さず、4000番の LiteLLM に `model_name` で並べて振り分ける。
 - **Ollama と同じ 11434 番を使う。** 同じGB10で Ollama を 11434 番のまま動かしているなら、

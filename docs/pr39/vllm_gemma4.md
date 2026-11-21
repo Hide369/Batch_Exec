@@ -128,7 +128,7 @@ curl -s http://localhost:11434/v1/models
 ```
 
 - [ ] ダウンロードしたフォルダの大きさが約62GBで、`*.safetensors` がそろっている
-- [ ] `/v1/models` に `qwen3-coder-next` が出ている（Qwen3-Coder-Next は動いたまま）
+- [ ] `/v1/models` に `claude-opus-4-6` が出ている（Qwen3-Coder-Next は動いたまま）
 
 ## 手順2: Gemma 4 31B で vLLM を起動し直す
 
@@ -138,67 +138,85 @@ curl -s http://localhost:11434/v1/models
 # 1. 夜間バッチを止める（使っている場合）
 sudo systemctl stop godoc-nightly.timer
 
-# 2. Qwen3-Coder-Next の vLLM を止める（モデルは消えない）
+# 2. Qwen3-Coder-Next の vLLM を止める（モデルは消えない。--restart unless-stopped 付きでも rm -f で消える）
 docker rm -f vllm
 
 # 3. ページキャッシュを解放
 sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
 free -h
 
-# 4. Gemma 4 31B で起動（Qwen3-Coder-Next のときと変わるのはモデル・コンテキスト長・パーサだけ）
-docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
+# 4. Gemma 4 31B で起動（Qwen3-Coder-Next のときと変わるのは、下の表の引数だけ）
+docker run -d \
+  --name vllm \
+  --gpus all \
+  --ipc=host \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  -p 11434:8000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   -e HF_HUB_OFFLINE=1 \
+  --restart unless-stopped \
   nvcr.io/nvidia/vllm:26.10-py3 \
-  vllm serve google/gemma-4-31B-it \
-    --served-model-name claude-opus-4-6 gemma-4-31b \
-    --host 0.0.0.0 --port 8000 \
-    --gpu-memory-utilization 0.75 \
-    --max-model-len 131072 \
-    --kv-cache-dtype fp8 \
-    --limit-mm-per-prompt '{"image": 0}' \
-    --enable-auto-tool-choice --tool-call-parser gemma4
+  python3 -m vllm.entrypoints.openai.api_server \
+  --model google/gemma-4-31B-it \
+  --served-model-name claude-opus-4-6 gemma-4-31b \
+  --enforce-eager \
+  --gpu-memory-utilization 0.75 \
+  --max-model-len 131072 \
+  --kv-cache-dtype fp8 \
+  --limit-mm-per-prompt '{"image": 0}' \
+  --enable-auto-tool-choice \
+  --tool-call-parser gemma4 \
+  --enable-prefix-caching
 
 docker logs -f vllm
 ```
 
-Qwen3-Coder-Next の起動コマンドとの違いは次のとおり。
+Qwen3-Coder-Next の起動コマンド（[vllm_migration.md の手順1.5](../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する)）との違いは次のとおり。`docker run` のオプション（`--ipc=host`・`--ulimit`・`-p 11434:8000`・`--restart unless-stopped`）と `--enforce-eager`・`--kv-cache-dtype fp8`・`--enable-prefix-caching` は同じ。
 
 | 引数 | Qwen3-Coder-Next | Gemma 4 31B | 理由 |
 | --- | --- | --- | --- |
-| モデル | `Qwen/Qwen3-Coder-Next-FP8` | `google/gemma-4-31B-it` | — |
-| `--served-model-name` | `claude-opus-4-6 qwen3-coder-next` | `claude-opus-4-6 gemma-4-31b` | 先頭の名前を同じにしておけば、アプリの `LLM_MODEL` は変えなくてよい |
+| `--model` | `Qwen/Qwen3-Coder-Next-FP8` | `google/gemma-4-31B-it` | — |
+| `--served-model-name` | `claude-opus-4-6` | `claude-opus-4-6 gemma-4-31b` | 先頭の名前を同じにしておけば、アプリの `LLM_MODEL` は変えなくてよい |
 | `--gpu-memory-utilization` | 0.8 | 0.75 | 重みが約62GBと小さい。GB10 で Gemma 4 31B を高い割合で動かすと OS が固まる報告があるため、低めにする |
 | `--max-model-len` | 262144 | 131072 | Gemma 4 31B の上限 |
 | `--limit-mm-per-prompt` | なし | 画像 0 | Gemma 4 は画像入力つきのモデル。テキストだけ使うので、画像用のメモリを取らない |
 | `--tool-call-parser` | `qwen3_coder` | `gemma4` | Gemma 4 はツール呼び出しの書式が違う |
-| ポート | `--network host`・`--port 11434` | `-p 11434:8000`・`--port 8000` | コンテナ内の vLLM は 8000 番で待ち受け、ホストの 11434 番に転送する。アプリ・`curl` からの接続先は今までどおり 11434 番。`-p` は `--network host` と一緒には効かないので、`--network host` は外す |
 | `-e HF_HUB_OFFLINE=1` | なし | あり | 手順1でダウンロード済みのものだけを使い、起動時にネットへ取りに行かない |
 
 - `--reasoning-parser` は付けない。Claude Code のシンキングは止めてある（アプリは `MAX_THINKING_TOKENS=0` を渡す）ので不要。Gemma 4 のシンキングはリクエストで指定したときだけ有効になる
-- 手順1でフォルダを指定してダウンロードした場合は、`-v ~/models:/models` を足し、`vllm serve /models/gemma-4-31B-it` にする（`-e HF_HUB_OFFLINE=1` はあってもなくてもよい）
-- NVFP4 版にする場合は、モデルを `nvidia/Gemma-4-31B-IT-NVFP4` に替えるだけ
+- 手順1でフォルダを指定してダウンロードした場合は、`-v ~/models:/models` を足し、`--model /models/gemma-4-31B-it` にする（`-e HF_HUB_OFFLINE=1` はあってもなくてもよい）
+- NVFP4 版にする場合は、`--model` を `nvidia/Gemma-4-31B-IT-NVFP4` に替えるだけ
 
 ### 別のイメージを使う場合（今の NGC のイメージが Gemma 4 に未対応のとき）
 
-起動時に `gemma4` のアーキテクチャやパーサが見つからないというエラーが出る場合は、NVIDIA の DGX Spark 向けプレイブックが Gemma 4 用に案内している vLLM の公式イメージを使う。このイメージは最初から `vllm serve` が起動するので、コマンドに `vllm serve` を書かない。
+起動時に `gemma4` のアーキテクチャやパーサが見つからないというエラーが出る場合は、NVIDIA の DGX Spark 向けプレイブックが Gemma 4 用に案内している vLLM の公式イメージを使う。このイメージは最初から API サーバーが起動するので、コマンドに `python3 -m vllm.entrypoints.openai.api_server` を書かず、イメージ名の後に `--model` 以降の引数だけを書く。
 
 ```bash
 docker pull vllm/vllm-openai:gemma4-cu130
 
 docker rm -f vllm
-docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
+docker run -d \
+  --name vllm \
+  --gpus all \
+  --ipc=host \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  -p 11434:8000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
   -e HF_HUB_OFFLINE=1 \
+  --restart unless-stopped \
   vllm/vllm-openai:gemma4-cu130 \
-    --model google/gemma-4-31B-it \
-    --served-model-name claude-opus-4-6 gemma-4-31b \
-    --host 0.0.0.0 --port 8000 \
-    --gpu-memory-utilization 0.75 \
-    --max-model-len 131072 \
-    --kv-cache-dtype fp8 \
-    --limit-mm-per-prompt '{"image": 0}' \
-    --enable-auto-tool-choice --tool-call-parser gemma4
+  --model google/gemma-4-31B-it \
+  --served-model-name claude-opus-4-6 gemma-4-31b \
+  --enforce-eager \
+  --gpu-memory-utilization 0.75 \
+  --max-model-len 131072 \
+  --kv-cache-dtype fp8 \
+  --limit-mm-per-prompt '{"image": 0}' \
+  --enable-auto-tool-choice \
+  --tool-call-parser gemma4 \
+  --enable-prefix-caching
 ```
 
 ## 手順3: 動作確認
@@ -275,17 +293,27 @@ Qwen3-Coder-Next のモデルは消していないので、起動し直して `.
 # 1. Gemma 4 の vLLM を止める
 docker rm -f vllm
 
-# 2. Qwen3-Coder-Next で起動（vllm_migration.md の手順5・案1と同じコマンド）
-docker run -d --name vllm --gpus all -p 11434:8000 --ipc=host \
+# 2. Qwen3-Coder-Next で起動（vllm_migration.md の手順1.5と同じコマンド）
+docker run -d \
+  --name vllm \
+  --gpus all \
+  --ipc=host \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  -p 11434:8000 \
   -v ~/.cache/huggingface:/root/.cache/huggingface \
+  --restart unless-stopped \
   nvcr.io/nvidia/vllm:26.10-py3 \
-  vllm serve Qwen/Qwen3-Coder-Next-FP8 \
-    --served-model-name claude-opus-4-6 qwen3-coder-next \
-    --host 0.0.0.0 --port 8000 \
-    --gpu-memory-utilization 0.8 \
-    --max-model-len 262144 \
-    --kv-cache-dtype fp8 \
-    --enable-auto-tool-choice --tool-call-parser qwen3_coder
+  python3 -m vllm.entrypoints.openai.api_server \
+  --model Qwen/Qwen3-Coder-Next-FP8 \
+  --served-model-name claude-opus-4-6 \
+  --enforce-eager \
+  --gpu-memory-utilization 0.8 \
+  --max-model-len 262144 \
+  --kv-cache-dtype fp8 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_coder \
+  --enable-prefix-caching
 
 # 3. .env の LLM_NUM_CTX を 262144 に戻して読み直す
 sudo systemctl reload godoc-web

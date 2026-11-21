@@ -249,7 +249,7 @@ pip install 'litellm[proxy]'
 
 | 項目 | 値 | 理由 |
 |---|---|---|
-| `model_name` | `qwen3-coder-next` / `gpt-oss-120b` | Claude Code が送る `model` 名。ここで行き先が決まる |
+| `model_name` | `claude-opus-4-6`（Qwen3-Coder-Next）/ `claude-opus-4-7`（gpt-oss-120b） | Claude Code が送る `model` 名。ここで行き先が決まる。**Opus 名だけにし、`claude-sonnet-*` は使わない**（Sonnet 名では Claude Code の自動承認モードが使えないため）。2つはバージョン番号で区別する |
 | `litellm_params.model` | `anthropic/<served-model-name>` | SGLang の `/v1/messages` へ形式を変えずに渡す |
 | `api_base` | GB10-A：`http://127.0.0.1:8000`、GB10-B：`http://192.168.10.12:11434` | LiteLLM が末尾に `/v1/messages` を付ける。**`/v1` は付けない** |
 | `master_key` | 任意の文字列 | Claude Code の `ANTHROPIC_AUTH_TOKEN` と同じ値にする |
@@ -287,7 +287,7 @@ journalctl -u litellm -f
 ### 7.4 LiteLLM 経由の動作確認
 
 ```bash
-for m in qwen3-coder-next gpt-oss-120b; do
+for m in claude-opus-4-6 claude-opus-4-7; do   # Qwen3-Coder-Next / gpt-oss-120b
   curl -s http://192.168.10.11:11434/v1/messages \
     -H "Authorization: Bearer sk-local-change-me" \
     -H "anthropic-version: 2023-06-01" \
@@ -332,31 +332,26 @@ done
 
 ```json
 {
-  "model": "qwen3-coder-next",
+  "model": "claude-opus-4-6",
   "modelPicker": {
     "replaceBuiltInOptions": true,
     "options": [
       {
-        "model": "gpt-oss-120b",
+        "model": "claude-opus-4-7",
         "label": "gpt-oss-120b（設計・レビュー）",
-        "description": "GB10-B / SGLang"
+        "description": "GB10-B / SGLang（claude-opus-4-7）"
       },
       {
-        "model": "qwen3-coder-next",
+        "model": "claude-opus-4-6",
         "label": "Qwen3-Coder-Next（実装）",
-        "description": "GB10-A / SGLang"
-      },
-      {
-        "model": "opusplan",
-        "label": "設計→実装 自動切替",
-        "description": "プランモードは gpt-oss-120b、実行は Qwen3-Coder-Next"
+        "description": "GB10-A / SGLang（claude-opus-4-6）"
       }
     ]
   },
   "env": {
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "gpt-oss-120b",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3-coder-next",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3-coder-next",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-6",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-4-6",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-opus-4-6",
 
     "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "120000",
@@ -370,12 +365,17 @@ done
 
 | 設定 | 意味 |
 |---|---|
-| `"model"` | 新しいセッションを始めるときのモデル。普段使いの Qwen にしておく |
-| `modelPicker.options` | プルダウンに出す行。`model` は LiteLLM の `model_name` と完全に一致させる |
+| `"model"` | 新しいセッションを始めるときのモデル。普段使いの Qwen（`claude-opus-4-6`）にしておく |
+| `modelPicker.options` | プルダウンに出す行。`model` は LiteLLM の `model_name` と完全に一致させる。表示名（`label`）は実際のモデル名にしてある |
 | `modelPicker.replaceBuiltInOptions: true` | Claude の既定モデル行を隠し、上の行（と **Default**、使用中のモデルの行）だけにする |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `opus` の割り当て先。`opusplan` のプランモードでもこれが使われる |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `sonnet` の割り当て先。`opusplan` の実行時と **Default** でこれが使われる |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | タイトル生成などの裏方処理と Explore サブエージェント用。指定しないと存在しない Claude のモデル名を送って失敗する |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `opus` の割り当て先 → `claude-opus-4-6`（Qwen） |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `sonnet` の割り当て先。**Default** でもこれが使われる → これも `claude-opus-4-6`。どこを選んでも `claude-sonnet-*` を送らない |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | タイトル生成などの裏方処理と Explore サブエージェント用 → `claude-opus-4-6`。指定しないと存在しない Claude のモデル名を送って失敗する |
+
+- **Sonnet 名（`claude-sonnet-*`）は使わない。** Sonnet 名のモデルでは自動承認モードが使えないため、
+  どの枠も Opus 名にし、gpt-oss-120b はバージョン違いの `claude-opus-4-7` で呼び分ける。
+- 以前の版にあった `opusplan`（プランモードは Opus 枠、実行は Sonnet 枠に自動で切り替える）の行は外した。
+  Sonnet 枠を使う前提の機能のため。設計と実装の切り替えは、9章のとおりプルダウンで行う。
 | `CLAUDE_CODE_ATTRIBUTION_HEADER=0` | システムプロンプト先頭に毎回変わる識別行が入るのを止める。これがないと SGLang のプレフィックスキャッシュが効かず、毎ターン会話履歴をすべて計算し直す（SGLang 公式が必須としている） |
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 自動圧縮を始める基準のウィンドウ。Claude Code は知らないモデルを 200K と見なすため、131072 の上限を超える前に圧縮させる（下限は 100000 に丸められる） |
 | `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | 1回の出力上限。入力と合わせて `--context-length` に収まるようにする |
@@ -401,15 +401,17 @@ VS Code を再起動し、Claude Code のパネルを開く。ログイン画面
 
 | 選ぶ行 | 使われるモデル | 向いている作業 |
 |---|---|---|
-| gpt-oss-120b（設計・レビュー） | GB10-B の gpt-oss-120b | 要件整理、設計、方式比較、コードレビュー |
-| Qwen3-Coder-Next（実装） | GB10-A の Qwen3-Coder-Next | 実装、リファクタリング、テスト作成、デバッグ |
-| 設計→実装 自動切替（`opusplan`） | プランモードは gpt-oss、実行は Qwen | 設計から実装まで一続きで頼むとき |
+| gpt-oss-120b（設計・レビュー） | GB10-B の gpt-oss-120b（`claude-opus-4-7`） | 要件整理、設計、方式比較、コードレビュー |
+| Qwen3-Coder-Next（実装） | GB10-A の Qwen3-Coder-Next（`claude-opus-4-6`） | 実装、リファクタリング、テスト作成、デバッグ |
 
-**自動切替の流れ**
+**設計から実装まで続けて頼むとき**
 
-1. プルダウンで「設計→実装 自動切替」を選ぶ。
-2. Shift+Tab でプランモードにして設計を頼む。このとき gpt-oss-120b が計画を立てる。
-3. 計画を承認すると実行に移り、Qwen3-Coder-Next が実装する。
+1. プルダウンで「gpt-oss-120b（設計・レビュー）」を選び、Shift+Tab でプランモードにして設計を頼む。
+2. 計画を承認したら、プルダウンで「Qwen3-Coder-Next（実装）」に切り替えて実装させる。
+
+切り替えた後に、自動承認モードが選べることを確かめる。選べない場合は、使っている Claude Code の版が
+`claude-opus-4-7` を自動承認モードの対象として扱っていない。別の Opus 名に変える
+（LiteLLM の `model_name` と 8.2 の `model` を一緒に変える）。
 
 会話の途中でモデルを切り替えても履歴はそのまま引き継がれる。ただし相手のサーバーが変わると
 プレフィックスキャッシュが使えないので、切り替えた直後の1回目は応答が遅い。
@@ -423,7 +425,8 @@ VS Code を再起動し、Claude Code のパネルを開く。ログイン画面
 - [ ] 6.2 のとおり、クライアントPCから GB10-B の 11434 番に届かない
 - [ ] 7.4 の curl で、LiteLLM 経由で両方のモデルが応答する
 - [ ] VS Code の Claude Code がログイン画面を出さずに開き、`/status` にゲートウェイの URL が出る
-- [ ] プルダウンに3行（と Default）だけが出る
+- [ ] プルダウンに2行（と Default）だけが出る
+- [ ] どちらのモデルでも自動承認モードが選べる
 - [ ] gpt-oss-120b を選ぶと GB10-B の `docker logs` にリクエストが来る
 - [ ] Qwen3-Coder-Next を選ぶと GB10-A の `docker logs` にリクエストが来る
 - [ ] ファイルの読み書きやコマンド実行などのツール呼び出しが、両方のモデルで成功する
@@ -438,7 +441,8 @@ VS Code を再起動し、Claude Code のパネルを開く。ログイン画面
 | VS Code でログイン画面が出る | `claudeCode.environmentVariables` に `ANTHROPIC_AUTH_TOKEN` があるか（8.1）。`~/.claude/settings.json` に書いただけでは足りない |
 | 401 | `ANTHROPIC_AUTH_TOKEN` と LiteLLM の `master_key` が一致しているか。SGLang に `--api-key` を付けていないか（6.2） |
 | 404 / 接続できない | LiteLLM の `api_base` に `/v1` を付けていないか（`/v1/v1/messages` になる）。ポートが GB10-A は 127.0.0.1:8000、GB10-B は 11434 か。GB10-B の `DOCKER-USER` で GB10-A まで塞いでいないか |
-| `model not found`（LiteLLM） | プルダウンの `model`、`ANTHROPIC_DEFAULT_*_MODEL`、LiteLLM の `model_name` が完全に一致しているか |
+| `model not found`（LiteLLM） | プルダウンの `model`、`ANTHROPIC_DEFAULT_*_MODEL`、LiteLLM の `model_name`（`claude-opus-4-6`・`claude-opus-4-7`）が完全に一致しているか。名前が `claude-sonnet-...` / `claude-haiku-...` なら、`ANTHROPIC_DEFAULT_SONNET_MODEL`・`HAIKU_MODEL` が抜けている |
+| 自動承認モードが選べない | 使っているモデル名が Sonnet 名になっていないか（`/status` で確かめる）。9章の最後の注意を参照 |
 | プルダウンに Claude のモデルが残る / 行が出ない | Claude Code が v2.1.242 以降か。`modelPicker` を `~/.claude/settings.json`（ユーザー設定）に書いたか（プロジェクト設定では無視される）。JSON の書き間違いがあるとその行は捨てられる |
 | ツールが呼ばれず文章だけが返る | SGLang の `--tool-call-parser` を確認する（gpt-oss は `gpt-oss`、Qwen は `qwen3_coder`） |
 | 毎ターン遅い | `CLAUDE_CODE_ATTRIBUTION_HEADER=0` が効いているか |
