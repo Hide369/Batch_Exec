@@ -49,7 +49,7 @@ vLLM で載せ、LiteLLM で束ねて VS Code の Claude Code からモデルを
 
 - GB10 ×2（DGX OS、NVIDIA ドライバ・Docker・NVIDIA Container Toolkit 導入済み）
 - 両機が同一LANにあり、固定IPを割り当て済み
-- クライアントPC：VS Code + Claude Code 拡張（**v2.1.129 以降推奨**、後述のモデル自動検出を使う場合）
+- クライアントPC：VS Code + Claude Code 拡張（**v2.1.242 以降推奨**。プルダウンにモデルの表示名を出す `modelPicker` を使うため。8章）
 - 両機で Ollama が 11434 番を使っている場合は、先に止めておく（[vllm_migration.md](../../pr33-38/vllm_migration.md) の Ollama 停止の手順）
 - 1台構成の vLLM（[vllm_migration.md](../../pr33-38/vllm_migration.md) の手順1.5で作ったコンテナ `vllm`）が動いている機械は、先に止めておく（4章の注意）
 
@@ -283,6 +283,21 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
 ```json
 {
   "model": "claude-opus-4-6",
+  "modelPicker": {
+    "replaceBuiltInOptions": true,
+    "options": [
+      {
+        "model": "claude-opus-4-6",
+        "label": "Qwen3-Coder-Next（実装）",
+        "description": "GB10-A / vLLM（claude-opus-4-6）"
+      },
+      {
+        "model": "claude-opus-4-7",
+        "label": "gpt-oss-120b（設計・レビュー）",
+        "description": "GB10-B / vLLM（claude-opus-4-7）"
+      }
+    ]
+  },
   "env": {
     "ANTHROPIC_BASE_URL": "http://192.168.10.11:11434",
     "ANTHROPIC_AUTH_TOKEN": "sk-local-change-me",
@@ -291,7 +306,6 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-4-6",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-opus-4-6",
 
-    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   }
 }
@@ -299,14 +313,22 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
 
 | 設定 | 意味 |
 |---|---|
+| `"model": "claude-opus-4-6"` | 起動時のモデル → Qwen3-Coder-Next（GB10-A、実装） |
+| `modelPicker.options` | プルダウン（`/model`）に出す行。`model` は LiteLLM の `model_name` と完全に一致させる。`label`・`description` は**表示だけ**を変え、送るモデル名（`claude-opus-4-6` など）は変わらない。Claude Code **v2.1.242 以降**が必要 |
+| `modelPicker.replaceBuiltInOptions: true` | Claude の既定のモデル行（Opus・Sonnet・Haiku など）を隠し、上の2行と **Default**、使用中のモデルの行だけにする。Sonnet 枠を誤って選ぶこともなくなる |
 | `ANTHROPIC_BASE_URL` | LiteLLM（GB10-A の 11434番）。クライアントの接続先はここだけ |
 | `ANTHROPIC_AUTH_TOKEN` | LiteLLM の `master_key` と同じ値（Hugging Face のトークンとは別物） |
-| `"model": "claude-opus-4-6"` | 起動時のモデル → Qwen3-Coder-Next（GB10-A、実装） |
-| `ANTHROPIC_DEFAULT_OPUS_MODEL` | プルダウンの「Opus」枠 → `claude-opus-4-6`（Qwen3-Coder-Next） |
-| `ANTHROPIC_DEFAULT_SONNET_MODEL` | 「Sonnet」枠・**Default** → これも `claude-opus-4-6`。Sonnet 枠を選んだり既定に戻ったりしても、`claude-sonnet-*` を送らない |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` | `opus` の割り当て先 → `claude-opus-4-6`（Qwen3-Coder-Next） |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL` | `sonnet` の割り当て先。**Default** でもこれが使われる → これも `claude-opus-4-6`。どこを選んでも `claude-sonnet-*` を送らない |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | タイトル生成などの裏方処理 → `claude-opus-4-6`（指定しないと存在しない Claude のモデル名を送って失敗する） |
-| `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` | LiteLLM の `/v1/models` を読み、`claude-opus-4-6`・`claude-opus-4-7` を `/model` ピッカーに「From gateway」として追加（v2.1.129+） |
 | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | テレメトリ等の外部通信を抑止 |
+
+- **`modelPicker` はユーザー設定（`~/.claude/settings.json`）に書く。** プロジェクトの `.claude/settings.json` や
+  `.claude/settings.local.json` に書いても無視される。JSON に書き間違いがあると、その行は捨てられる。
+- 以前の版にあった `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`（LiteLLM の `/v1/models` から行を足す）は外した。
+  `replaceBuiltInOptions: true` では、自動検出で見つかった行も隠れるためである。
+- VS Code 拡張は、ターミナル版と同じ設定ファイルを読む。ただし、VS Code のプルダウンが `modelPicker` の表示名に従うことは、
+  公式ドキュメントに明記されていない。表示が変わらない場合も、`/model` と打てば同じ一覧が出る。
 
 - **Sonnet 名（`claude-sonnet-*`）は使わない。** Sonnet 名のモデルでは自動承認モードが使えないため、
   3つの枠すべてを Opus 名にし、gpt-oss-120b はバージョン違いの `claude-opus-4-7` で呼び分ける。
@@ -319,20 +341,22 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
 
 ## 9. 使い方：モデルの切り替え
 
-プルダウン（または `/model`）で、Opus のバージョン番号で選ぶ。
+チャット入力欄のモデル名のプルダウン（または `/model`）を開くと、8章で付けた表示名の行が出る。
 
-| 選ぶもの | 使われるモデル | 向いている作業 |
-|---|---|---|
-| `claude-opus-4-6`（Opus 枠・Default） | Qwen3-Coder-Next（GB10-A） | 実装、リファクタリング、テスト作成、デバッグ |
-| `claude-opus-4-7` | gpt-oss-120b（GB10-B） | 要件整理、設計、方式比較、コードレビュー |
+| 選ぶ行 | 送るモデル名 | 使われるモデル | 向いている作業 |
+|---|---|---|---|
+| Qwen3-Coder-Next（実装） | `claude-opus-4-6` | GB10-A の Qwen3-Coder-Next | 実装、リファクタリング、テスト作成、デバッグ |
+| gpt-oss-120b（設計・レビュー） | `claude-opus-4-7` | GB10-B の gpt-oss-120b | 要件整理、設計、方式比較、コードレビュー |
 
-- `claude-opus-4-7` は、モデル自動検出が有効ならプルダウンの「From gateway」に出る。出ない場合は
-  `/model claude-opus-4-7` と打てば切り替わる（`claude-opus-4-6` に戻すときも同じ）。
-- 設計から実装まで続けて頼むときは、`claude-opus-4-7` で計画を立てさせ、承認したら `/model claude-opus-4-6` に
-  切り替えて実装させる。会話の履歴は引き継がれる。
+- プルダウンに表示名が出ない場合（Claude Code が v2.1.242 より古いなど）でも、`/model claude-opus-4-7` と
+  打てば切り替わる（`claude-opus-4-6` に戻すときも同じ）。
+- 設計から実装まで続けて頼むときは、「gpt-oss-120b（設計・レビュー）」で計画を立てさせ、承認したら
+  「Qwen3-Coder-Next（実装）」に切り替えて実装させる。会話の履歴は引き継がれる。
 - 切り替えた後に自動承認モード（Shift+Tab で切り替えるモード表示）が選べることを確かめる。選べない場合は、
-  使っている Claude Code の版がそのモデル名を自動承認モードの対象として扱っていない。`claude-opus-4-7` を
-  別の Opus 名に変える（LiteLLM の `model_name` と、ここで使う名前を一緒に変える）。
+  使っている Claude Code の版がそのモデル名を自動承認モードの対象として扱っていない。次のどちらかを試す（どちらも未検証）。
+  - `modelPicker` のその行に `"behavesAs": "claude-opus-4-6"` を足す（v2.1.257 以降）。Claude Code が知らないモデル名に、
+    既知のモデルの機能の扱いを当てはめる指定で、送るモデル名と表示名は変わらない
+  - `claude-opus-4-7` を別の Opus 名に変える（LiteLLM の `model_name` と `modelPicker` の `model` を一緒に変える）
 
 ---
 
@@ -343,9 +367,9 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
 - [ ] 6章の `curl .../v1/models` で両GB10のモデル名が見える
 - [ ] クライアントPCから GB10-B の 11434番に**届かない**（2章）
 - [ ] LiteLLM 経由（GB10-A の 11434番）の `/v1/messages` で両モデルが応答する
-- [ ] VS Code の Claude Code で `/model` を開き、切り替え候補が表示される
-- [ ] `claude-opus-4-7` を選ぶと GB10-B の `docker logs -f vllm-gptoss` にリクエストが来る
-- [ ] `claude-opus-4-6` を選ぶと GB10-A の `docker logs -f vllm-qwen` にリクエストが来る
+- [ ] VS Code の Claude Code のプルダウン（または `/model`）に、「Qwen3-Coder-Next（実装）」「gpt-oss-120b（設計・レビュー）」の2行（と Default）だけが出る
+- [ ] 「gpt-oss-120b（設計・レビュー）」を選ぶと GB10-B の `docker logs -f vllm-gptoss` にリクエストが来る
+- [ ] 「Qwen3-Coder-Next（実装）」を選ぶと GB10-A の `docker logs -f vllm-qwen` にリクエストが来る
 - [ ] どちらのモデルでも自動承認モードが選べる
 - [ ] LiteLLM のログ（`--detailed_debug`）に `claude-sonnet` という名前のリクエストが来ていない
 - [ ] ファイル読み書き・コマンド実行などのツール呼び出しが成功する
@@ -367,7 +391,7 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
 | ツールが呼ばれず文章だけ返る | vLLM の `--enable-auto-tool-choice` と `--tool-call-parser`（gpt-oss=`openai`、Qwen=`qwen3_coder`）を確認 |
 | 長い会話で途中エラー | `--max-model-len` 超過。値を確認し、Claude Code 側の自動圧縮（`/compact`）を早めに使う |
 | Qwen が起動しない（OOM） | FP8 → 4bit 版へ変更、または `--max-model-len` / `--gpu-memory-utilization` を下げる。GB10-A は LiteLLM も動くので余白を残す |
-| プルダウンに `claude-opus-4-7` が出ない | Claude Code のバージョン（v2.1.129+）と `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` を確認。出なくても `/model claude-opus-4-7` で切替可能 |
+| プルダウンに表示名の行が出ない / Claude のモデル行が残る | Claude Code が v2.1.242 以降か。`modelPicker` を `~/.claude/settings.json`（ユーザー設定）に書いたか（プロジェクト設定では無視される）。JSON の書き間違いがないか。出なくても `/model claude-opus-4-7` で切替可能 |
 | 原因不明 | `litellm ... --detailed_debug` でリクエスト/レスポンスを確認 |
 
 ---
