@@ -7,9 +7,14 @@
 #   GB10-A の vLLM は 127.0.0.1:8000（ループバックのみ）
 #   GB10-B の vLLM はコンテナ内 8000 → ホスト 11434 に転送（GB10-A からのみ許可）
 
+# Claude Code が送るモデル名（model_name）は Claude の Opus 名にそろえる。
+#   claude-sonnet-* は使わない（Sonnet 名では Claude Code の自動承認モードが使えないため）。
+#   claude-opus-4-6 = Qwen3-Coder-Next（1台構成・アプリの LLM_MODEL と同じ名前）
+#   claude-opus-4-7 = gpt-oss-120b（バージョン番号を変えて区別する）
+
 model_list:
   # 実装・コーディング用（GB10-A）
-  - model_name: qwen3-coder-next
+  - model_name: claude-opus-4-6          # Qwen3-Coder-Next
     litellm_params:
       model: hosted_vllm/qwen3-coder-next    # vLLM の --served-model-name と一致させる
       api_base: http://127.0.0.1:8000/v1     # LiteLLM と同じ GB10-A 上（vLLM はループバック公開）
@@ -18,7 +23,7 @@ model_list:
       timeout: 600
 
   # 設計・レビュー用（GB10-B）
-  - model_name: gpt-oss-120b
+  - model_name: claude-opus-4-7          # gpt-oss-120b
     litellm_params:
       model: hosted_vllm/gpt-oss-120b
       api_base: http://192.168.10.12:11434/v1  # ← GB10-B の IP に変更（ポートはホスト側の 11434）
