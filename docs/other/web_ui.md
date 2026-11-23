@@ -57,7 +57,7 @@ git pull
 .venv/bin/pip install -r requirements.txt     # fastapi・uvicorn が追加された
 
 # 1. 管理者パスワードを決め、ハッシュを .env に書く（パスワード自体はどこにも保存されない）
-.venv/bin/python -m godoc_agent.web.password  # 12文字以上。表示された WEB_ADMIN_PASSWORD_HASH=... の行を .env に追記
+.venv/bin/python -m godoc_agent.web.password  # 9文字以上。表示された WEB_ADMIN_PASSWORD_HASH=... の行を .env に追記
 #    （`>> .env` でリダイレクトしてもよい。入力の確認は画面に出る）
 
 # 2. 残りの設定を .env に追記する（値は環境に合わせる）
