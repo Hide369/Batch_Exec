@@ -10,7 +10,7 @@ import sys
 
 from .auth import hash_password
 
-MIN_LENGTH = 12
+MIN_LENGTH = 9
 
 
 def main() -> int:
