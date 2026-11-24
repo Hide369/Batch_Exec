@@ -291,7 +291,11 @@ Qwen3-Coder-Next のモデルは消していないので、起動し直して `.
 # 1. Gemma 4 の vLLM を止める
 docker rm -f vllm
 
-# 2. Qwen3-Coder-Next で起動（vllm_migration.md の手順1.5と同じコマンド）
+# 2. ページキャッシュを解放
+sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
+free -h
+
+# 3. Qwen3-Coder-Next で起動（vllm_migration.md の手順1.5と同じコマンド）
 docker run -d \
   --name vllm \
   --gpus all \
@@ -312,7 +316,7 @@ docker run -d \
   --tool-call-parser qwen3_coder \
   --enable-prefix-caching
 
-# 3. .env の LLM_NUM_CTX を 262144 に戻して読み直す
+# 4. .env の LLM_NUM_CTX を 262144 に戻して読み直す
 sudo systemctl reload godoc-web
 ```
 

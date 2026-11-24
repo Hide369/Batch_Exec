@@ -197,6 +197,10 @@ docker run --rm ${VLLM_IMAGE} vllm --version     # 入っているvLLMの版を�
 ```bash
 mkdir -p ~/.cache/huggingface
 
+# 起動前にページキャッシュを解放する（GB10はCPUとGPUがメモリを共有するため、空きを増やしておく）
+sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
+free -h   # buff/cache が減り available が増えたことを確認
+
 docker run -d --name vllm-chat --restart unless-stopped \
   --gpus all --ipc=host \
   -p 127.0.0.1:11434:8000 \
@@ -271,6 +275,8 @@ Restart=always
 RestartSec=10
 # コンテナ自身の再起動ポリシーとは二重にしない
 ExecStartPre=-/usr/bin/docker rm -f vllm-chat
+# 起動前にページキャッシュを解放する（+ で root 権限で実行）
+ExecStartPre=+/bin/sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
 ExecStart=/usr/bin/docker run --rm --name vllm-chat \
   --gpus all --ipc=host \
   -p 127.0.0.1:11434:8000 \
@@ -488,6 +494,10 @@ playbookが載せている「Agent Ready」のレシピをそのまま引く。�
 エージェントからはツールが使えない。
 
 ```bash
+# 起動前にページキャッシュを解放する（GB10はCPUとGPUがメモリを共有するため、空きを増やしておく）
+sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
+free -h   # buff/cache が減り available が増えたことを確認
+
 docker run -d --name vllm-code --restart unless-stopped \
   --gpus all --ipc=host \
   -p 127.0.0.1:11434:8000 \

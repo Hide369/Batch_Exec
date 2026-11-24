@@ -93,6 +93,10 @@ vLLM自体の導入（コンテナの取得、CUDA 13 と `sm_121` の前提、s
 export VLLM_IMAGE=nvcr.io/nvidia/vllm:26.10-py3   # タグを固定する（vllm_migration.md と同じ）。latest は使わない
 mkdir -p ~/.cache/huggingface
 
+# 起動前にページキャッシュを解放する（GB10はCPUとGPUがメモリを共有するため、空きを増やしておく）
+sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
+free -h   # buff/cache が減り available が増えたことを確認
+
 docker run -d --name vllm-code --restart unless-stopped \
   --gpus all --ipc=host \
   -p 11434:8000 \
