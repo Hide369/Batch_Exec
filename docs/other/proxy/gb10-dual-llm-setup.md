@@ -236,11 +236,22 @@ curl http://192.168.10.12:11434/v1/models   # gpt-oss-120b が見えること（
 ## 7. LiteLLM ゲートウェイの構築（GB10-A）
 
 ### 7.1 インストール
+
+LiteLLM は**専用の仮想環境**（`~/litellm-venv`）に入れる。GB10 に batch_exec 用の仮想環境があっても、そこには入れない。
+
+- batch_exec の `requirements.txt` は `fastapi`・`uvicorn`・`httpx` などのバージョンを固定している。
+  `litellm[proxy]` も同じ系統のライブラリを入れるため、同じ環境だと上書きや依存関係のエラーが起き、Web 画面やバッチの動作が変わるおそれがある。
+- LiteLLM は更新が頻繁で、LiteLLM を上げると batch_exec が、`pip install -r requirements.txt` をやり直すと LiteLLM が壊れる関係になる。
+- GB10-A で batch_exec を動かしている場合、バッチも 11434 番の LiteLLM 経由で Qwen を呼ぶようになる。環境を分けて、片方の不具合をもう片方に持ち込まないようにする。
+
 ```bash
 python3 -m venv ~/litellm-venv
-source ~/litellm-venv/bin/activate
-pip install 'litellm[proxy]'
+~/litellm-venv/bin/pip install 'litellm[proxy]'
+~/litellm-venv/bin/litellm --version   # 入ったことを確かめる
 ```
+
+`source ~/litellm-venv/bin/activate` で有効化してもよいが、batch_exec の仮想環境を有効にしたまま続けて操作すると取り違えやすい。
+上のように `~/litellm-venv/bin/` のフルパスで呼べば、どの環境が有効になっていても LiteLLM 専用の環境が使われる。
 
 ### 7.2 設定ファイル
 同じフォルダの [litellm-config.yaml](litellm-config.yaml) を配置し、GB10-B の `api_base` の IP と `master_key` を環境に合わせて変更する。GB10-A 側の `api_base` は `127.0.0.1:8000` のままでよい（LiteLLM と同じマシンのため）。
@@ -257,11 +268,39 @@ pip install 'litellm[proxy]'
 
 ### 7.3 起動
 ```bash
-litellm --config litellm-config.yaml --host 0.0.0.0 --port 11434
+~/litellm-venv/bin/litellm --config litellm-config.yaml --host 0.0.0.0 --port 11434
 # トラブル時は --detailed_debug を付ける
 ```
 
-常駐させる場合は systemd サービス化する（`ExecStart` の末尾も `--port 11434` にする）。
+常駐させる場合は systemd サービス化する。`ExecStart` には LiteLLM 専用の仮想環境の `litellm` をフルパスで書く
+（systemd は `~` を展開しないので `/home/<ユーザー名>/...` と書く）。設定ファイルは `/home/<ユーザー名>/litellm/litellm-config.yaml` に置いた例。
+
+```ini
+# /etc/systemd/system/litellm.service
+[Unit]
+Description=LiteLLM gateway (Claude Code -> vLLM)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=<ユーザー名>
+WorkingDirectory=/home/<ユーザー名>/litellm
+ExecStart=/home/<ユーザー名>/litellm-venv/bin/litellm --config /home/<ユーザー名>/litellm/litellm-config.yaml --host 0.0.0.0 --port 11434
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now litellm
+journalctl -u litellm -f   # 起動ログ
+```
+
+LiteLLM を更新するときも、専用の環境だけを触る（`~/litellm-venv/bin/pip install -U 'litellm[proxy]'` → `sudo systemctl restart litellm`）。batch_exec の仮想環境は変わらない。
+
 Docker（`ghcr.io/berriai/litellm`）で動かす場合は `--network host` で起動する（127.0.0.1:8000 に届かせるため）。
 その場合は 11434 番が ufw の規則どおりに絞られているか、クライアント以外から確かめる。
 
