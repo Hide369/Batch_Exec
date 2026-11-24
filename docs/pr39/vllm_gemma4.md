@@ -171,7 +171,7 @@ docker run -d \
 docker logs -f vllm
 ```
 
-Qwen3-Coder-Next の起動コマンド（[vllm_migration.md の手順1.5](../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する)）との違いは次のとおり。`docker run` のオプション（`--ipc=host`・`--ulimit`・`-p 11434:8000`・`--restart unless-stopped`）と `--enforce-eager`・`--kv-cache-dtype fp8`・`--enable-prefix-caching` は同じ。
+Qwen3-Coder-Next の起動コマンド（[vllm_migration.md の手順1.5](../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する)）との違いは次のとおり。`docker run` のオプション（`--ipc=host`・`--ulimit`・`-p 11434:8000`・`--restart unless-stopped`）と `--kv-cache-dtype fp8`・`--enable-prefix-caching` は同じ。
 
 | 引数 | Qwen3-Coder-Next | Gemma 4 31B | 理由 |
 | --- | --- | --- | --- |
