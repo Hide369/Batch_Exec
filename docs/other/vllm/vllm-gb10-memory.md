@@ -23,8 +23,8 @@ GB10上でvLLMを起動したら、メモリを使い切ってOOMで落ちた、
 > `docker update --restart no vllm && docker stop vllm` で止める。止めないと 11434 番とメモリを取り合い、
 > OS を再起動するたびに `vllm` が先に立ち上がる。戻すときは `docker update --restart unless-stopped vllm && docker start vllm`。
 >
-> 1台構成で安定稼働を確認した指定のうち、`--ulimit memlock=-1 --ulimit stack=67108864` と `--enforce-eager` は
-> この文書の起動例に入っていない。起動例が起動直後やCUDAグラフの取得中に落ちるときは、まずこれらを足して試す。
+> 1台構成で安定稼働を確認した指定のうち、`--ulimit memlock=-1 --ulimit stack=67108864` は
+> この文書の起動例に入っていない。起動例が起動直後に落ちるときは、まずこれを足して試す。
 
 ## 目次
 
@@ -110,7 +110,6 @@ free -h                              # buff/cache が減ったことを確認
 |`--max-model-len`|モデルの上限|131072|32768|KVキャッシュの予約量を抑える|
 |`--max-num-seqs`|256前後|4|4|同時処理数。1人で使うなら小さくてよい|
 |`--kv-cache-dtype`|auto|fp8|fp8|KVキャッシュをほぼ半分にする|
-|`--enforce-eager`|無効|無効|落ちるときだけ|CUDAグラフ用のメモリを省く。速度は落ちる|
 
 ```bash
 export VLLM_IMAGE=nvcr.io/nvidia/vllm:26.10-py3   # タグを固定する（vllm_migration.md と同じ）。HF_TOKEN は渡さない
@@ -148,9 +147,8 @@ KVキャッシュとCUDAグラフの側を削る。
 
 まだ落ちる場合は、次の順に**1つずつ**変えて試す。
 
-1. `--enforce-eager` を足す
-2. `--max-model-len` を16384へ下げる
-3. `--max-num-seqs` を1へ下げる
+1. `--max-model-len` を16384へ下げる
+2. `--max-num-seqs` を1へ下げる
 
 ここまで下げても落ちるなら、vLLMの設定ではなく空き容量の問題である。0〜2節に戻り、
 `free -h` の `available` が80GB以上あるかを確かめる。
@@ -185,7 +183,6 @@ watch -n 2 free -h                               # 推論中のメモリを別�
 |起動時に `CUDA out of memory`|確保割合が空きより大きい|1・2節を実施して空きを増やす。gpt-oss-120bなら `--gpu-memory-utilization` は0.6を下限とし、それでも落ちるなら `--max-model-len` を下げる|
 |`No available memory for the cache blocks`|重みを載せた後にKVキャッシュの余地がない|`--max-model-len` を下げる。`--kv-cache-dtype fp8` を付ける|
 |`max_model_len` がKVキャッシュに収まらないと出る|コンテキスト長が大きすぎる|`--max-model-len` をエラーが示す値以下にする|
-|CUDAグラフの取得中に落ちる|グラフ用のメモリが足りない|`--enforce-eager` を足す|
 |SSHが固まる・OSが応答しない|OSの分まで使い切った|電源から再起動し、`docker rm -f vllm-code` で自動再起動を断ってから、3節の保守的な値で起動し直す|
 |推論の途中で落ちる|長い入力や同時リクエストでKVが足りない|`--max-num-seqs` と `--max-model-len` を下げる|
 

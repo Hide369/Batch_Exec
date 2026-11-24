@@ -172,7 +172,6 @@ docker run -d \
   python3 -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen3-Coder-Next-FP8 \
   --served-model-name claude-opus-4-6 \
-  --enforce-eager \
   --gpu-memory-utilization 0.8 \
   --max-model-len 262144 \
   --kv-cache-dtype fp8 \
@@ -194,7 +193,6 @@ docker rm -f vllm
 | `-p 11434:8000` | コンテナ内の vLLM は既定の 8000 番で待ち受け、ホストの 11434 番（Ollama と同じ番号）に転送する。アプリ・`curl` の接続先は 11434 番。`-p` は `--network host` と一緒には効かないので、`--network host` は付けない |
 | `--restart unless-stopped` | OS・Docker の再起動後に自動で起動する（「運用メモ」参照）。`docker stop vllm` で手動で止めたときは立ち上がらない |
 | `python3 -m vllm.entrypoints.openai.api_server --model ...` | OpenAI・Anthropic 互換の API サーバーを起動する（`vllm serve <モデル>` と同じサーバー）。モデルは `--model` で渡す |
-| `--enforce-eager` | CUDA グラフを使わない。グラフ分のメモリを節約し、起動時のグラフ取得で落ちるのを防ぐ（速度は少し下がる） |
 | `--enable-prefix-caching` | 同じ前置き（システムプロンプト・スキル）の計算結果を使い回す。1ファイルずつ同じ指示で `claude -p` を呼ぶバッチで効く |
 
 その他の引数（`--gpu-memory-utilization`・`--max-model-len` など）の意味は手順3の表を参照。
@@ -224,7 +222,6 @@ Qwen3-Coder-Next FP8 は重みだけで約85GBあるため、`--gpu-memory-utili
 | `--kv-cache-dtype` | auto | fp8 | KV キャッシュをほぼ半減。256K を載せるために使う |
 | `--served-model-name` | モデルのリポジトリ名 | claude-opus-4-6 | API で指定するモデル名（別名）。`.env` の `LLM_MODEL` と揃える |
 | `--enable-auto-tool-choice` `--tool-call-parser` | 無効 | 有効・`qwen3_coder` | Claude Code などのツール呼び出しを解釈する |
-| `--enforce-eager` | 無効 | 有効 | CUDA グラフ分のメモリを節約（速度は少し低下） |
 | `--enable-prefix-caching` | 無効（モデルによっては有効） | 有効 | 共通の前置きの計算を使い回し、同じ指示で繰り返し呼ぶバッチを速くする |
 
 まだ枯渇する場合は、次の順で一つずつ変更する。変えるたびに `docker rm -f vllm` で消し、手順1.5のコマンドの該当する引数を書き換えて起動し直す。`--max-model-len` を変えたら、`.env` の `LLM_NUM_CTX` も同じ値にする。
@@ -238,7 +235,7 @@ Qwen3-Coder-Next FP8 は重みだけで約85GBあるため、`--gpu-memory-utili
 vLLM は、モデルの読み込みとウォームアップがすべて終わってから API を受け付ける。それまでは `curl` が `Connection refused` になるが、これは正常な挙動。`docker logs -f vllm` で、次の順に進むのを待つ。
 
 1. `Loading safetensors checkpoint shards: xx%`（モデルの読み込み）
-2. `KV cache` の確保量の表示（ウォームアップ。数分止まって見えることがある。`--enforce-eager` を付けているので `Capturing CUDA graphs` は出ない）
+2. `KV cache` の確保量の表示と `Capturing CUDA graphs`（ウォームアップ。数分止まって見えることがある）
 3. `Application startup complete` / `Uvicorn running on http://0.0.0.0:8000`（起動完了。ここから `curl` が通る。コンテナ内では 8000 番で待ち受け、ホストの 11434 番に転送される）
 
 途中で止まって見えるときは、次で進んでいるかを確かめる。
@@ -484,7 +481,6 @@ sudo systemctl start godoc-nightly.timer
 | 起動時に `CUDA out of memory` | 予約割合が空きより大きい | 手順1・2を実施する。それでも出る場合は `--gpu-memory-utilization` を 0.75 まで下げ、`--max-model-len` も下げる |
 | `No available memory for the cache blocks` | 重みを載せた後に KV キャッシュの余地がない | `--max-model-len` を下げる、`fp8` KV キャッシュを使う。`--gpu-memory-utilization` は 0.85 までにとどめる |
 | `max_model_len` が KV キャッシュに収まらないと出る | コンテキスト長が大きすぎる | `--max-model-len` をエラーが示す値以下にし、`.env` の `LLM_NUM_CTX` も揃える |
-| CUDA グラフ取得中（`Capturing CUDA graphs`）に落ちる | `--enforce-eager` が抜けている | 手順1.5のコマンドどおり `--enforce-eager` を付けて起動し直す |
 | 起動直後に `RLIMIT_MEMLOCK` や共有メモリ（`/dev/shm`）不足のエラーで落ちる | `--ipc=host`・`--ulimit` が抜けている | 手順1.5のコマンドどおり `--ipc=host --ulimit memlock=-1 --ulimit stack=67108864` を付けて起動し直す |
 | 止めたはずの vLLM が再起動後に立ち上がり、Ollama とメモリを取り合う | `--restart unless-stopped` で起動している | `docker update --restart no vllm` の後に `docker stop vllm`（やめる場合は `docker rm -f vllm`） |
 | 端末が固まる・OS が応答しない | OS の分まで使い切った | 再起動後、`--gpu-memory-utilization 0.75`・`--max-model-len 131072` で起動し直す |
@@ -521,7 +517,7 @@ LLM_NUM_CTX=131072
 | `--served-model-name`（先頭 = `LLM_MODEL`） | `claude-opus-4-6` | `claude-opus-4-6 gpt-oss-120b` |
 | 必要な vLLM | 0.15.0 以上 | 0.10.1 以上 |
 
-`docker run` のオプション（`--ipc=host`・`--ulimit`・`-p 11434:8000`・`--restart unless-stopped`）と `--enforce-eager`・`--enable-prefix-caching` は Qwen3-Coder-Next と同じにする。
+`docker run` のオプション（`--ipc=host`・`--ulimit`・`-p 11434:8000`・`--restart unless-stopped`）と `--enable-prefix-caching` は Qwen3-Coder-Next と同じにする。
 
 ```bash
 # 1. Qwen3-Coder-Next の vLLM を止める
@@ -549,7 +545,6 @@ docker run -d \
   python3 -m vllm.entrypoints.openai.api_server \
   --model openai/gpt-oss-120b \
   --served-model-name claude-opus-4-6 gpt-oss-120b \
-  --enforce-eager \
   --gpu-memory-utilization 0.7 \
   --max-model-len 131072 \
   --enable-auto-tool-choice \
@@ -697,7 +692,7 @@ Conflicts=ollama.service
 [Service]
 User=<ユーザー名>
 ExecStartPre=+/bin/sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
-ExecStart=/usr/bin/docker run --rm --name vllm --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -p 11434:8000 -v /home/<ユーザー名>/.cache/huggingface:/root/.cache/huggingface nvcr.io/nvidia/vllm:26.10-py3 python3 -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-Coder-Next-FP8 --served-model-name claude-opus-4-6 --enforce-eager --gpu-memory-utilization 0.8 --max-model-len 262144 --kv-cache-dtype fp8 --enable-auto-tool-choice --tool-call-parser qwen3_coder --enable-prefix-caching
+ExecStart=/usr/bin/docker run --rm --name vllm --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -p 11434:8000 -v /home/<ユーザー名>/.cache/huggingface:/root/.cache/huggingface nvcr.io/nvidia/vllm:26.10-py3 python3 -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-Coder-Next-FP8 --served-model-name claude-opus-4-6 --gpu-memory-utilization 0.8 --max-model-len 262144 --kv-cache-dtype fp8 --enable-auto-tool-choice --tool-call-parser qwen3_coder --enable-prefix-caching
 ExecStop=/usr/bin/docker stop vllm
 Restart=on-failure
 

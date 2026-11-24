@@ -144,7 +144,6 @@ docker run -d \
   python3 -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen3-Coder-Next-FP8 \
   --served-model-name qwen3-coder-next \
-  --enforce-eager \
   --gpu-memory-utilization 0.8 \
   --max-model-len 262144 \
   --kv-cache-dtype fp8 \
@@ -165,7 +164,7 @@ docker run -d \
   `docker update --restart no vllm && docker stop vllm`（使わないなら `docker rm -f vllm`）。
 - `-p 127.0.0.1:8000:8000` で、ホストのループバックだけに公開する（LAN からは届かない）。
   コンテナの中の API サーバーは既定で全アドレスの 8000 番で待ち受けるので、`--host`・`--port` は書かなくてよい。
-- `--ipc=host`・`--ulimit`・`--enforce-eager` の意味は [vllm_migration.md の手順1.5](../../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する) の表を参照。
+- `--ipc=host`・`--ulimit` の意味は [vllm_migration.md の手順1.5](../../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する) の表を参照。
 - `-e HF_TOKEN` は付けない（2章）。
 - 公式サンプルの `--tensor-parallel-size 2` は**付けない**（1台構成のため）。
 - LiteLLM（Python のプロセス1つ）は数百MB程度なので、1台構成と同じ `--gpu-memory-utilization 0.8` のまま載る。
@@ -176,7 +175,7 @@ docker run -d \
 
 ## 5. GB10-B：gpt-oss-120b の起動
 
-`docker run` のオプションと `--enforce-eager`・`--enable-prefix-caching` は GB10-A（＝1台構成で稼働中のコマンド）と同じにし、
+`docker run` のオプションと `--enable-prefix-caching` は GB10-A（＝1台構成で稼働中のコマンド）と同じにし、
 モデル固有の引数だけを gpt-oss-120b 用にする。
 
 ```bash
@@ -193,7 +192,6 @@ docker run -d \
   python3 -m vllm.entrypoints.openai.api_server \
   --model openai/gpt-oss-120b \
   --served-model-name gpt-oss-120b \
-  --enforce-eager \
   --gpu-memory-utilization 0.85 \
   --max-model-len 131072 \
   --enable-auto-tool-choice \
@@ -385,7 +383,6 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
 | 自動承認モードが選べない | 使っているモデル名が Sonnet 名になっていないか（`/status` で確かめる）。9章の最後の注意を参照 |
 | 接続できない / タイムアウト | 2章のポート一覧どおりか（GB10-A：`sudo ufw status`、`ss -ltnp` で LiteLLM が 11434・vLLM が 127.0.0.1:8000。GB10-B：`docker ps` で `0.0.0.0:11434->8000/tcp`、`sudo iptables -L DOCKER-USER -n`）。GB10-B の 11434番が GB10-A から届くか |
 | 11434 番がすでに使われていて起動しない | Ollama が残っていないか（`sudo systemctl stop ollama && sudo systemctl disable ollama`）。1台構成の `vllm` コンテナが自動起動していないか（`docker ps`。`docker update --restart no vllm && docker stop vllm`） |
-| CUDA グラフ取得中（`Capturing CUDA graphs`）に落ちる | `--enforce-eager` が抜けている。4・5章のコマンドどおり付けて起動し直す |
 | 401 / 認証エラー（LiteLLM） | `ANTHROPIC_AUTH_TOKEN` と LiteLLM の `master_key` が一致しているか |
 | モデル取得で `401` / `gated` | 利用申請が要るモデルを指定している。トークンは使わない方針なので、公開モデル（本書の2つ）を使う |
 | ツールが呼ばれず文章だけ返る | vLLM の `--enable-auto-tool-choice` と `--tool-call-parser`（gpt-oss=`openai`、Qwen=`qwen3_coder`）を確認 |
