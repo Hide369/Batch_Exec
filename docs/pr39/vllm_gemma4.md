@@ -160,7 +160,6 @@ docker run -d \
   python3 -m vllm.entrypoints.openai.api_server \
   --model google/gemma-4-31B-it \
   --served-model-name claude-opus-4-6 gemma-4-31b \
-  --enforce-eager \
   --gpu-memory-utilization 0.75 \
   --max-model-len 131072 \
   --kv-cache-dtype fp8 \
@@ -172,7 +171,7 @@ docker run -d \
 docker logs -f vllm
 ```
 
-Qwen3-Coder-Next の起動コマンド（[vllm_migration.md の手順1.5](../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する)）との違いは次のとおり。`docker run` のオプション（`--ipc=host`・`--ulimit`・`-p 11434:8000`・`--restart unless-stopped`）と `--enforce-eager`・`--kv-cache-dtype fp8`・`--enable-prefix-caching` は同じ。
+Qwen3-Coder-Next の起動コマンド（[vllm_migration.md の手順1.5](../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する)）との違いは次のとおり。`docker run` のオプション（`--ipc=host`・`--ulimit`・`-p 11434:8000`・`--restart unless-stopped`）と `--kv-cache-dtype fp8`・`--enable-prefix-caching` は同じ。
 
 | 引数 | Qwen3-Coder-Next | Gemma 4 31B | 理由 |
 | --- | --- | --- | --- |
@@ -209,7 +208,6 @@ docker run -d \
   vllm/vllm-openai:gemma4-cu130 \
   --model google/gemma-4-31B-it \
   --served-model-name claude-opus-4-6 gemma-4-31b \
-  --enforce-eager \
   --gpu-memory-utilization 0.75 \
   --max-model-len 131072 \
   --kv-cache-dtype fp8 \
@@ -307,7 +305,6 @@ docker run -d \
   python3 -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen3-Coder-Next-FP8 \
   --served-model-name claude-opus-4-6 \
-  --enforce-eager \
   --gpu-memory-utilization 0.8 \
   --max-model-len 262144 \
   --kv-cache-dtype fp8 \

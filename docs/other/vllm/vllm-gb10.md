@@ -40,8 +40,9 @@ RAGの生成とコーディングエージェントを社内ネットワーク�
 > `docker update --restart no vllm && docker stop vllm` で止める。止めないと 11434 番とメモリを取り合い、
 > OS を再起動するたびに `vllm` が先に立ち上がる。戻すときは `docker update --restart unless-stopped vllm && docker start vllm`。
 >
-> 1台構成で安定稼働を確認した指定のうち、`--ulimit memlock=-1 --ulimit stack=67108864` と `--enforce-eager` は
-> この文書の起動例に入っていない。起動例が起動直後やCUDAグラフの取得中に落ちるときは、まずこれらを足して試す。
+> 1台構成で安定稼働を確認した指定のうち、`--ulimit memlock=-1 --ulimit stack=67108864` は
+> この文書の起動例に入っていない。起動例が起動直後に落ちるときは、まずこれを足して試す。
+> CUDAグラフの取得中に落ちるときは `--enforce-eager` を足す（速度は少し下がる）。
 
 ## 目次
 
