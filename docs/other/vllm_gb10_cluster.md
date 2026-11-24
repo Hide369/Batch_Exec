@@ -14,7 +14,7 @@ GB10（DGX Spark）4台を200GbEのQSFPスイッチで繋ぎ、1台に載らな�
 > **1台構成で安定稼働を確認した起動コマンドは
 > [vllm_migration.md の手順1.5](../pr33-38/vllm_migration.md#コンテナで-vllm-を起動する) にある。**
 > この文書の起動コマンドは、そこで有効だった指定（`--ipc=host`・`--ulimit memlock=-1`・
-> `--ulimit stack=67108864`・`--kv-cache-dtype fp8`・`--enable-prefix-caching`）を
+> `--ulimit stack=67108864`・`--enforce-eager`・`--kv-cache-dtype fp8`・`--enable-prefix-caching`）を
 > 引き継ぐ。4台構成に要る `--network host`・`--node-rank`・`--headless` は `vllm serve` の
 > 機能なので、1台構成の `python3 -m vllm.entrypoints.openai.api_server` ではなく `vllm serve` で起動する。
 >
@@ -421,6 +421,7 @@ vllm serve <モデルのHFハンドル> \
 |`--master-addr` / `--master-port`|台どうしが待ち合わせる先。4台ともヘッドのConnectXのIPと同じポート|
 |`--headless`|ワーカーはAPIを出さない|
 |`--host 0.0.0.0 --port 11434`|`--network host` なので `-p` で番号を付け替えられない。1台構成と同じ 11434 番（ファイアウォールで開けている番号）でヘッドが直接待ち受ける|
+|`--enforce-eager`|CUDAグラフを使わず、その分のメモリを省く。1台構成で安定稼働した設定と同じ|
 |`--gpu-memory-utilization 0.8`|各台の128GBに対する割合。OSの分を残す（1台構成と同じ値）。落ちるなら下げる|
 |`--max-model-len` / `--max-num-seqs`|KVキャッシュの予約を抑えるため、まず小さめに始めて広げる|
 |`--kv-cache-dtype fp8` / `--enable-prefix-caching`|KVキャッシュをほぼ半分にする／共通の前置きの計算を使い回す。1台構成と同じ|
@@ -576,6 +577,7 @@ Rayのダッシュボード（`http://<ヘッドのIP>:8265`）は認証が無�
 |vLLMの起動が待ったまま進まない|4台のうち1台が起動していない、または `--master-addr` が違う|4台すべてのコンテナのログを見る。1台の失敗でヘッドも止まる|
 |1台だけOOMで落ちる|その台にOllama・1台構成の `vllm` コンテナ・キャッシュが残っている|その台で7-2節を行う（`docker ps` で `vllm` が動いていないか見る）。`--gpu-memory-utilization` を下げる|
 |ヘッドの起動が `address already in use`（11434番）で落ちる|1台構成の `vllm` コンテナかOllamaが11434番を使っている|7-2節のとおり `docker update --restart no vllm && docker stop vllm`、`sudo systemctl stop ollama`|
+|CUDAグラフの取得中（`Capturing CUDA graphs`）に落ちる|`--enforce-eager` が抜けている|7-4節のコマンドどおり4台すべてに付ける|
 |ログに `NET/Socket` と出る・遅い|NCCLがRoCEを使えていない|`NCCL_IB_HCA` と `--privileged` を確認。帯域が出ないならパイプライン並列へ|
 |rsyncで写し先のディレクトリが無いと言われる|写し先に `~/.cache/huggingface` が無い|6節のとおり `--mkpath` を付ける|
 |モデルが見つからないと言われる|4台のうちどこかにモデルが無い|6節。4台で同じパスにそろえる|
