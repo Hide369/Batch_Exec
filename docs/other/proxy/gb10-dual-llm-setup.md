@@ -131,6 +131,10 @@ Qwen3-Coder-Next は 80B（MoE）。BF16 だと約160GBで GB10 の128GBに載�
 変えるのは、LiteLLM と同じ機械に置くための3か所（コンテナ名・公開ポート・`--served-model-name`）だけである。
 
 ```bash
+# 起動前にページキャッシュを解放する（GB10はCPUとGPUがメモリを共有するため、空きを増やしておく）
+sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
+free -h   # buff/cache が減り available が増えたことを確認
+
 docker run -d \
   --name vllm-qwen \
   --gpus all \
@@ -179,6 +183,10 @@ docker run -d \
 モデル固有の引数だけを gpt-oss-120b 用にする。
 
 ```bash
+# 起動前にページキャッシュを解放する（GB10はCPUとGPUがメモリを共有するため、空きを増やしておく）
+sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
+free -h   # buff/cache が減り available が増えたことを確認
+
 docker run -d \
   --name vllm-gptoss \
   --gpus all \

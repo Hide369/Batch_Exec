@@ -177,6 +177,8 @@ GB10のファイアウォールで開いているのは 11434 と 4000 だけな
 ```bash
 vllm_run() {   # 使い方: vllm_run <コンテナ名> <ホスト側の出し方> -- <vllm serve の引数...>
   local name=$1 publish=$2; shift 3   # 3つ目の "--" を捨てる
+  # 起動前にページキャッシュを解放する（GB10はCPUとGPUがメモリを共有するため、空きを増やしておく）
+  sync; echo 3 | sudo tee /proc/sys/vm/drop_caches > /dev/null
   docker run -d --name "$name" --restart unless-stopped \
     --gpus all --ipc=host \
     -p ${publish}:8000 \
@@ -255,6 +257,10 @@ wget https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16/resolve/m
 ```
 
 ```bash
+# 起動前にページキャッシュを解放する（GB10はCPUとGPUがメモリを共有するため、空きを増やしておく）
+sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
+free -h   # buff/cache が減り available が増えたことを確認
+
 docker run -d --name vllm-chat --restart unless-stopped \
   --gpus all --ipc=host -p 11434:8000 \
   -e VLLM_USE_FLASHINFER_MOE_FP8=1 \
