@@ -19,6 +19,10 @@ vLLM で載せ、LiteLLM で束ねて VS Code の Claude Code からモデルを
 > - 推論エンジンを SGLang にする場合は [gb10-dual-sglang-setup.md](gb10-dual-sglang-setup.md)
 >
 > 本書は **2台をモデル名で振り分ける**ためにゲートウェイを置く構成である。
+>
+> **検証状況（2026-11-25）**: 移行先の GB10 ×2 で本書の手順（vLLM 版）どおりに構築し、LiteLLM ゲートウェイ経由で
+> クライアントの Claude Code からモデルを切り替えて、両モデルが応答することを確かめた。
+> 確認した項目は 10章のチェックリストに「2026-11-25 確認済み」と記した。印のない項目はまだ確かめていない。
 
 ## 1. 構成概要
 
@@ -366,10 +370,10 @@ VS Code 拡張は `~/.claude/settings.json`（Windows では `%USERPROFILE%\.cla
 - [ ] `docker run` に `HF_TOKEN` を付けずに、両モデルのダウンロードと起動が終わる
 - [ ] 6章の `curl .../v1/models` で両GB10のモデル名が見える
 - [ ] クライアントPCから GB10-B の 11434番に**届かない**（2章）
-- [ ] LiteLLM 経由（GB10-A の 11434番）の `/v1/messages` で両モデルが応答する
+- [ ] LiteLLM 経由（GB10-A の 11434番）の `/v1/messages` で両モデルが応答する（2026-11-25 確認済み）
 - [ ] VS Code の Claude Code のプルダウン（または `/model`）に、「Qwen3-Coder-Next（実装）」「gpt-oss-120b（設計・レビュー）」の2行（と Default）だけが出る
-- [ ] 「gpt-oss-120b（設計・レビュー）」を選ぶと GB10-B の `docker logs -f vllm-gptoss` にリクエストが来る
-- [ ] 「Qwen3-Coder-Next（実装）」を選ぶと GB10-A の `docker logs -f vllm-qwen` にリクエストが来る
+- [ ] 「gpt-oss-120b（設計・レビュー）」を選ぶと GB10-B の `docker logs -f vllm-gptoss` にリクエストが来る（2026-11-25 確認済み）
+- [ ] 「Qwen3-Coder-Next（実装）」を選ぶと GB10-A の `docker logs -f vllm-qwen` にリクエストが来る（2026-11-25 確認済み）
 - [ ] どちらのモデルでも自動承認モードが選べる
 - [ ] LiteLLM のログ（`--detailed_debug`）に `claude-sonnet` という名前のリクエストが来ていない
 - [ ] ファイル読み書き・コマンド実行などのツール呼び出しが成功する
